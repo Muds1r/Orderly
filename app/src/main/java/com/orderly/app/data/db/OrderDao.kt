@@ -122,7 +122,8 @@ interface OrderDao {
 
         var existing = when {
             !incoming.orderNumber.isNullOrBlank() ->
-                getByStoreAndOrderNumber(incoming.store, incoming.orderNumber)
+                getByStoreAndOrderNumberIgnoreCase(incoming.store, incoming.orderNumber)
+                    ?: getByStoreAndOrderNumber(incoming.store, incoming.orderNumber)
             else -> null
         }
         // Courier mail may have created tracking|<cn> before the store email arrived.
@@ -139,7 +140,8 @@ interface OrderDao {
             // If unique conflict ignored, resolve the real row.
             val resolved = when {
                 !incoming.orderNumber.isNullOrBlank() ->
-                    getByStoreAndOrderNumber(incoming.store, incoming.orderNumber)
+                    getByStoreAndOrderNumberIgnoreCase(incoming.store, incoming.orderNumber)
+                        ?: getByStoreAndOrderNumber(incoming.store, incoming.orderNumber)
                 !incoming.trackingNumber.isNullOrBlank() ->
                     getByTrackingNumber(incoming.trackingNumber)
                 else -> getById(incoming.id)
@@ -177,7 +179,7 @@ interface OrderDao {
                 carrier = incoming.carrier ?: existing.carrier,
                 shipFrom = incoming.shipFrom ?: existing.shipFrom,
                 lastLocation = incoming.lastLocation ?: existing.lastLocation,
-                amount = incoming.amount ?: existing.amount,
+                amount = preferAmount(existing.amount, incoming.amount),
                 currency = incoming.currency ?: existing.currency,
                 paymentStatus = incoming.paymentStatus ?: existing.paymentStatus,
                 productSummary = incoming.productSummary ?: existing.productSummary,
@@ -207,7 +209,7 @@ interface OrderDao {
                 carrier = incoming.carrier,
                 shipFrom = incoming.shipFrom,
                 lastLocation = incoming.lastLocation,
-                amount = incoming.amount,
+                amount = preferAmount(existing.amount, incoming.amount),
                 currency = incoming.currency,
                 paymentStatus = incoming.paymentStatus,
                 status = mergedStatus,
@@ -218,6 +220,13 @@ interface OrderDao {
             )
         }
         return survivorId
+    }
+
+    /** Keep the real purchase total — never let a later discount figure overwrite it. */
+    private fun preferAmount(existing: Double?, incoming: Double?): Double? = when {
+        existing == null -> incoming
+        incoming == null -> existing
+        else -> maxOf(existing, incoming)
     }
 
     @Transaction
@@ -234,7 +243,7 @@ interface OrderDao {
         val existing = getById(orderId) ?: return
         val mergedStatus = when {
             status == null -> existing.status
-            forceStatus -> status
+            forceStatus -> OrderStatusMerge.preferLive(existing.status, status)
             else -> OrderStatusMerge.prefer(existing.status, status)
         }
         updateTrackingSnapshot(
@@ -291,14 +300,28 @@ interface OrderDao {
     @Query(
         """
         SELECT * FROM orders
-        WHERE status IN ('SHIPPED', 'IN_TRANSIT', 'OUT_FOR_DELIVERY', 'DELAYED')
-          AND trackingNumber IS NOT NULL
+        WHERE trackingNumber IS NOT NULL
           AND trackingNumber != ''
-        ORDER BY updatedAt ASC
+          AND status NOT IN ('CANCELLED', 'RETURNED')
+        ORDER BY
+          CASE WHEN status = 'DELIVERED' THEN 1 ELSE 0 END,
+          updatedAt ASC
         LIMIT :limit
         """
     )
     suspend fun ordersNeedingLiveTrack(limit: Int = 40): List<OrderEntity>
+
+    @Query("SELECT * FROM orders")
+    suspend fun listAllOrders(): List<OrderEntity>
+
+    @Query(
+        """
+        SELECT * FROM orders
+        WHERE lower(store) = lower(:store) AND orderNumber = :orderNumber
+        LIMIT 1
+        """
+    )
+    suspend fun getByStoreAndOrderNumberIgnoreCase(store: String, orderNumber: String): OrderEntity?
 
     @Query(
         """
@@ -417,5 +440,47 @@ object OrderStatusMerge {
             return current
         }
         return if ((rank[incoming] ?: 0) >= (rank[current] ?: 0)) incoming else current
+    }
+
+    /**
+     * Live courier status is authoritative for correcting false "Delivered",
+     * but early M&P "Booked" must not overwrite email "on the way" / in-transit.
+     */
+    fun preferLive(emailStatus: OrderStatus, liveStatus: OrderStatus): OrderStatus {
+        if (liveStatus == OrderStatus.DELIVERED ||
+            liveStatus == OrderStatus.RETURNED ||
+            liveStatus == OrderStatus.CANCELLED ||
+            liveStatus == OrderStatus.OUT_FOR_DELIVERY ||
+            liveStatus == OrderStatus.DELAYED
+        ) {
+            return liveStatus
+        }
+        // Correct false email Delivered when courier still shows movement.
+        if (emailStatus == OrderStatus.DELIVERED && liveStatus != OrderStatus.DELIVERED) {
+            return if (liveStatus in setOf(
+                    OrderStatus.UNKNOWN,
+                    OrderStatus.AWAITING_PAYMENT,
+                    OrderStatus.PROCESSING,
+                    OrderStatus.PAID
+                )
+            ) {
+                OrderStatus.IN_TRANSIT
+            } else {
+                liveStatus
+            }
+        }
+        val transit = setOf(
+            OrderStatus.SHIPPED,
+            OrderStatus.IN_TRANSIT,
+            OrderStatus.OUT_FOR_DELIVERY
+        )
+        val early = setOf(
+            OrderStatus.UNKNOWN,
+            OrderStatus.AWAITING_PAYMENT,
+            OrderStatus.PROCESSING,
+            OrderStatus.PAID
+        )
+        if (emailStatus in transit && liveStatus in early) return emailStatus
+        return prefer(emailStatus, liveStatus)
     }
 }

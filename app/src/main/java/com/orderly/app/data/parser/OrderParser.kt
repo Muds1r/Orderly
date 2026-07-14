@@ -38,15 +38,6 @@ object OrderParser {
         Regex("""\b(?:1Z[A-Z0-9]{16})\b""")
     )
 
-    private val amountRegexes = listOf(
-        Regex(
-            """(?:total|grand\s*total|order\s*total|amount|paid)\s*:?\s*(?:Rs\.?|PKR\.?|₨|USD|US\$|\$|€|£)?\s*([\d,]+(?:\.\d{1,2})?)""",
-            RegexOption.IGNORE_CASE
-        ),
-        Regex("""(?:Rs\.?|PKR\.?|₨)\s*:?\s*([\d,]+(?:\.\d{1,2})?)""", RegexOption.IGNORE_CASE),
-        Regex("""(?:USD|US\$|\$)\s*([\d,]+(?:\.\d{1,2})?)""")
-    )
-
     private val productRegexes = listOf(
         Regex("""(?:item|product|bought|ordered)\s*:?\s*(.{5,80}?)(?=\s*\r?\n|\s{2,}|$)""", RegexOption.IGNORE_CASE),
         Regex(""""([^"]{5,80})"""")
@@ -132,6 +123,8 @@ object OrderParser {
         if (!looksLike && status == OrderStatus.UNKNOWN) return null
         // Unknown shops: require shipping/order language, not just a random #.
         if (knownStore == null && !looksLikeStrict(lower, subjectLower)) return null
+        // Dispatch/marketing mail with only a phone number as "tracking" — skip.
+        if (orderNumber == null && tracking != null && isPhoneLike(tracking)) return null
 
         val amount = extractAmount(text)
         val product = extractProduct(text, subject)
@@ -149,10 +142,11 @@ object OrderParser {
             else -> null
         }
 
-        val id = if (!orderNumber.isNullOrBlank()) {
-            "${store.lowercase()}|$orderNumber"
-        } else {
-            messageId
+        // Stable ids so confirmation + ship + dispatch emails merge into one row.
+        val id = when {
+            !orderNumber.isNullOrBlank() -> "${store.lowercase()}|$orderNumber"
+            !tracking.isNullOrBlank() -> "${store.lowercase()}|cn|$tracking"
+            else -> messageId
         }
 
         val locationEvents = extractLocationEvents(text, timestamp, messageId, status)
@@ -311,13 +305,13 @@ object OrderParser {
             listOf("out for delivery", "arriving today").any { it in sub } ->
                 return OrderStatus.OUT_FOR_DELIVERY
             listOf("was delivered", "has been delivered", "delivered successfully", "package delivered")
-                .any { it in sub } -> return OrderStatus.DELIVERED
+                .any { it in sub } && !isFutureDeliveryWording(sub) -> return OrderStatus.DELIVERED
             listOf("on the way", "on its way", "in transit", "shipment from").any { it in sub } ->
                 return OrderStatus.IN_TRANSIT
             listOf("has shipped", "order shipped", "dispatched").any { it in sub } ->
                 return OrderStatus.SHIPPED
-            listOf("order confirmed", "thanks for your order", "order placed").any { it in sub } ->
-                return OrderStatus.PROCESSING
+            listOf("order confirmed", "thanks for your order", "order placed", "confirmed")
+                .any { it in sub } -> return OrderStatus.PROCESSING
         }
 
         return when {
@@ -326,14 +320,8 @@ object OrderParser {
                 OrderStatus.RETURNED
             listOf("out for delivery", "arriving today").any { it in s } -> OrderStatus.OUT_FOR_DELIVERY
             listOf("delayed", "delivery attempt failed").any { it in s } -> OrderStatus.DELAYED
-            // Only past-tense / confirmed delivery — never "will be delivered soon"
-            listOf(
-                "was delivered", "has been delivered", "delivered successfully",
-                "package delivered", "order delivered", "your package was delivered",
-                "delivered to you", "successfully delivered"
-            ).any { it in s } &&
-                !Regex("""\b(will be|to be|soon be)\s+delivered\b""").containsMatchIn(s) ->
-                OrderStatus.DELIVERED
+            // Past-tense delivery only — never "will be delivered to you soon"
+            isConfirmedDelivered(s) -> OrderStatus.DELIVERED
             listOf(
                 "in transit", "on the way", "on its way", "arrived at", "reached",
                 "departed", "scanned at", "picked up by the shipper"
@@ -346,10 +334,32 @@ object OrderParser {
                 OrderStatus.PAID
             listOf(
                 "order confirmed", "order confirmation", "thanks for your order",
-                "thank you for your order", "order placed", "we're preparing"
+                "thank you for your order", "thank you for your purchase", "order placed",
+                "we're preparing", "now in process"
             ).any { it in s } -> OrderStatus.PROCESSING
             else -> OrderStatus.UNKNOWN
         }
+    }
+
+    private fun isFutureDeliveryWording(text: String): Boolean =
+        Regex(
+            """\b(will be|to be|soon be|expected to be)\s+delivered\b""",
+            RegexOption.IGNORE_CASE
+        ).containsMatchIn(text) ||
+            Regex("""\bdelivered to you soon\b""", RegexOption.IGNORE_CASE).containsMatchIn(text)
+
+    /** True only for confirmed past delivery — not marketing / ETA wording. */
+    private fun isConfirmedDelivered(text: String): Boolean {
+        if (isFutureDeliveryWording(text)) return false
+        return listOf(
+            "was delivered",
+            "has been delivered",
+            "delivered successfully",
+            "package delivered",
+            "order delivered",
+            "your package was delivered",
+            "successfully delivered"
+        ).any { it in text }
     }
 
     private fun extractOrderNumber(text: String, subject: String): String? {
@@ -368,13 +378,20 @@ object OrderParser {
                 val cleaned = PakCourier.normalizeCn(cleanToken(match.groupValues[1]))
                 if (cleaned.equals(orderNumber, ignoreCase = true)) return@forEach
                 if (cleaned.length < 8) return@forEach
-                // Skip Pakistani mobile numbers mistaken for CNs
-                if (cleaned.matches(Regex("""03\d{9}"""))) return@forEach
-                if (cleaned.matches(Regex("""92\d{10}"""))) return@forEach
+                // Skip phone / WhatsApp numbers mistaken for courier CNs
+                if (isPhoneLike(cleaned)) return@forEach
                 return cleaned
             }
         }
         return null
+    }
+
+    /** Pakistani mobiles, landlines, and WhatsApp hotlines (e.g. 02137130284). */
+    fun isPhoneLike(value: String): Boolean {
+        val n = value.filter { it.isDigit() }
+        return n.matches(Regex("""03\d{9}""")) ||
+            n.matches(Regex("""92\d{10}""")) ||
+            n.matches(Regex("""0\d{9,11}""")) // 021… landlines / hotlines
     }
 
     private fun extractShipFrom(text: String): String? {
@@ -416,12 +433,104 @@ object OrderParser {
     }
 
     private fun extractAmount(text: String): Double? {
-        for (regex in amountRegexes) {
-            val match = regex.find(text) ?: continue
-            val value = match.groupValues[1].replace(",", "").toDoubleOrNull()
-            if (value != null && value > 0) return value
+        // Shopify often puts the label on one line and "Rs. 2,699" on the next.
+        val money = """(?:Rs\.?|PKR\.?|₨|USD|US\$|\$|€|£)?\s*([\d,]+(?:\.\d{1,2})?)"""
+        val gap = """\s*:?\s*(?:\r?\n\s*)*"""
+
+        // 1) Order total (not "Total paid today" / not "You saved")
+        val totalPatterns = listOf(
+            Regex("""(?:grand\s*total|order\s*total|total\s*amount)$gap$money""", setOf(RegexOption.IGNORE_CASE)),
+            Regex("""\btotal\b(?!\s*paid)$gap$money""", setOf(RegexOption.IGNORE_CASE))
+        )
+        for (regex in totalPatterns) {
+            regex.findAll(text).forEach { match ->
+                val amountStart = match.groups[1]?.range?.first ?: return@forEach
+                if (isNonPurchaseAmountContext(text, amountStart)) return@forEach
+                val value = match.groupValues[1].replace(",", "").toDoubleOrNull() ?: return@forEach
+                if (value > 0) return value
+            }
         }
-        return null
+
+        // 2) Subtotal (still better than unit promo price)
+        Regex("""\bsubtotal\b$gap$money""", setOf(RegexOption.IGNORE_CASE)).findAll(text).forEach { match ->
+            val amountStart = match.groups[1]?.range?.first ?: return@forEach
+            if (isNonPurchaseAmountContext(text, amountStart)) return@forEach
+            val value = match.groupValues[1].replace(",", "").toDoubleOrNull() ?: return@forEach
+            if (value > 0) return value
+        }
+
+        // 3) Shopify "Buy 1 - 1799" only when this mail has no total (ship follow-up)
+        Regex(
+            """Buy\s*1\s*[-–:]\s*(?:Rs\.?|PKR\.?|₨)?\s*([\d,]+(?:\.\d{1,2})?)""",
+            RegexOption.IGNORE_CASE
+        ).find(text)?.groupValues?.get(1)?.replace(",", "")?.toDoubleOrNull()
+            ?.takeIf { it > 0 }
+            ?.let { return it }
+
+        // 4) Generic currency — skip discounts / thresholds; do not prefer strike-through list prices
+        val candidates = mutableListOf<Double>()
+        listOf(
+            Regex("""(?:Rs\.?|PKR\.?|₨)\s*:?\s*([\d,]+(?:\.\d{1,2})?)""", RegexOption.IGNORE_CASE),
+            Regex("""(?:USD|US\$|\$)\s*([\d,]+(?:\.\d{1,2})?)""")
+        ).forEach { regex ->
+            regex.findAll(text).forEach { match ->
+                val amountStart = match.groups[1]?.range?.first ?: match.range.first
+                if (isNonPurchaseAmountContext(text, amountStart)) return@forEach
+                val value = match.groupValues[1].replace(",", "").toDoubleOrNull() ?: return@forEach
+                if (value > 0) candidates += value
+            }
+        }
+        return candidates.maxOrNull()
+    }
+
+    /**
+     * Skip discount / promo / threshold / COD-zero figures so we store the real order total.
+     */
+    private fun isNonPurchaseAmountContext(text: String, amountStart: Int): Boolean {
+        val beforeStart = (amountStart - 56).coerceAtLeast(0)
+        val before = text.substring(beforeStart, amountStart)
+        val beforeLower = before.lowercase()
+
+        // Keep labeled order totals / subtotals (even if "above Rs…" appears earlier)
+        if (Regex(
+                """(?:grand\s*total|order\s*total|total\s*amount|\bsubtotal\b|\btotal\b(?!\s*paid))\s*:?\s*(?:\r?\n\s*)*(?:rs\.?|pkr\.?|₨|\$|€|£)?\s*$""",
+                setOf(RegexOption.IGNORE_CASE)
+            ).containsMatchIn(before)
+        ) {
+            // Still reject "total paid today" / savings lines
+            if ("paid" in beforeLower.takeLast(24) && "today" in beforeLower.takeLast(24)) return true
+            if ("saved" in beforeLower.takeLast(24) || "you saved" in beforeLower) return true
+            return false
+        }
+
+        // Keep Shopify unit price line when used as fallback
+        if (Regex(
+                """buy\s*1\s*[-–:]\s*(?:rs\.?|pkr\.?|₨)?\s*$""",
+                RegexOption.IGNORE_CASE
+            ).containsMatchIn(before)
+        ) {
+            return false
+        }
+
+        // Negative / parenthetical discount: (-Rs. 899) or -Rs.899
+        if (Regex("""\(\s*-\s*(?:rs\.?|pkr\.?|₨|\$)?\s*$""", RegexOption.IGNORE_CASE)
+                .containsMatchIn(before)
+        ) {
+            return true
+        }
+        if (Regex("""[-−–]\s*(?:rs\.?|pkr\.?|₨|\$)\s*$""", RegexOption.IGNORE_CASE)
+                .containsMatchIn(before)
+        ) {
+            return true
+        }
+
+        val skipSignals = listOf(
+            "% off", " percent off", "discount", "save ", "saved", "saving", "coupon", "promo",
+            "buy 2", "buy 3", "buy 4", "above", "over rs", "over pkr",
+            "free shipping", "minimum", "starting at", "as low as", "was rs",
+            "compare at", "strike", "paid today", "total paid"
+        )
+        return skipSignals.any { it in beforeLower }
     }
 
     private fun extractProduct(text: String, subject: String): String? {

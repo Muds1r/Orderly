@@ -56,6 +56,7 @@ object StoreRegistry {
         // Common Pakistan brands (optional shortcuts)
         "saeedghani1888.com" to "Saeed Ghani",
         "saeedghani.com" to "Saeed Ghani",
+        "alerts.saeedghani.com" to "Saeed Ghani",
         "divora.com" to "Divora",
         "j.pk" to "J."
     )

@@ -372,14 +372,27 @@ object LiveTrackingClient {
 
     private fun statusFromText(text: String): OrderStatus {
         val s = text.lowercase()
+        // Future / ETA wording must not count as delivered.
+        if (Regex("""\b(will be|to be|soon be)\s+delivered\b""").containsMatchIn(s) ||
+            "delivered to you soon" in s
+        ) {
+            return when {
+                "out for delivery" in s -> OrderStatus.OUT_FOR_DELIVERY
+                "transit" in s || "on the way" in s || "picked" in s -> OrderStatus.IN_TRANSIT
+                "dispatched" in s || "shipped" in s -> OrderStatus.SHIPPED
+                "booked" in s || "placed" in s -> OrderStatus.PROCESSING
+                else -> OrderStatus.IN_TRANSIT
+            }
+        }
         return when {
-            "delivered" in s || "received by" in s -> OrderStatus.DELIVERED
+            "delivered" in s || "received by consignee" in s || "received by customer" in s ->
+                OrderStatus.DELIVERED
             "out for delivery" in s || "out-for-delivery" in s -> OrderStatus.OUT_FOR_DELIVERY
             "delay" in s || "attempt" in s || "exception" in s || "hold" in s -> OrderStatus.DELAYED
             "return" in s || "cancel" in s -> OrderStatus.RETURNED
             "booked" in s || "placed" in s || "prepared for shipment" in s -> OrderStatus.PROCESSING
             "transit" in s || "arrived" in s || "departed" in s || "facility" in s ||
-                "on the way" in s || "karachi" in s && "booked" !in s -> OrderStatus.IN_TRANSIT
+                "on the way" in s -> OrderStatus.IN_TRANSIT
             "shipped" in s || "dispatched" in s || "picked" in s -> OrderStatus.SHIPPED
             else -> OrderStatus.IN_TRANSIT
         }
@@ -435,7 +448,11 @@ object LiveTrackingClient {
             "dd-MM-yyyy HH:mm",
             "dd/MM/yyyy HH:mm",
             "d MMM yyyy, h:mm a",
-            "d MMM yyyy h:mm a"
+            "d MMM yyyy h:mm a",
+            "dd MMM yyyy h:mm a",
+            "dd MMM yyyy, h:mm a",
+            "d MMM yyyy HH:mm",
+            "dd MMM yyyy HH:mm"
         )
         for (p in patterns) {
             try {

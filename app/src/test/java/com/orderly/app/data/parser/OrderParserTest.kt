@@ -133,6 +133,45 @@ class OrderParserTest {
     }
 
     @Test
+    fun parsesDivoraConfirmationTotal2699() {
+        val result = OrderParser.parse(
+            messageId = "<divora-confirm@shopify>",
+            fromHeader = "Divora <store+62945329263@t.shopifyemail.com>",
+            subject = "Order #6214 confirmed",
+            body = """
+                Order #6214
+                Thank you for your order!
+                Order summary
+                Intense Repair Serum - (5 IN 1) × 2
+                Buy 1 - 1799
+                BUY 2 (-Rs. 899)
+                Rs. 3,598
+                Rs. 2,699
+                Subtotal
+                Rs. 2,699
+                Shipping
+                Rs. 0
+                Taxes
+                Rs. 0
+                Total
+                Rs. 2,699
+                You saved Rs. 899
+                Total paid today
+                Rs. 0
+                Payment
+                Cash on Delivery (COD)
+            """.trimIndent(),
+            timestamp = 1_700_000_400_000L
+        )
+        assertNotNull(result)
+        val order = result!!.order
+        assertEquals("Divora", order.store)
+        assertEquals("6214", order.orderNumber)
+        assertEquals(2699.0, order.amount!!, 0.001)
+        assertEquals("PKR", order.currency)
+    }
+
+    @Test
     fun parsesDivoraShopifyLeopards() {
         val result = OrderParser.parse(
             messageId = "<divora@shopify>",
@@ -143,6 +182,8 @@ class OrderParserTest {
                 Your order is on the way. Track your shipment to see the delivery status.
                 Leopards Courier tracking number: CC7527356953
                 Intense Repair Serum - (5 IN 1) × 2
+                Buy 1 - 1799
+                BUY 2 (-Rs. 899)
             """.trimIndent(),
             timestamp = 1_700_000_500_000L
         )
@@ -153,6 +194,29 @@ class OrderParserTest {
         assertEquals("CC7527356953", order.trackingNumber)
         assertEquals("Leopards", order.carrier)
         assertEquals(OrderStatus.IN_TRANSIT, order.status)
+        // Ship mail has no Total — Buy 1 is a fallback; merge with confirmation keeps 2699
+        assertEquals(1799.0, order.amount!!, 0.001)
+        assertEquals("divora|6214", order.id)
+    }
+
+    @Test
+    fun ignoresDiscountAmountInParens() {
+        val result = OrderParser.parse(
+            messageId = "<price@shop.com>",
+            fromHeader = "Shop <orders@example-shop.com>",
+            subject = "Order #9999 confirmed",
+            body = """
+                Order #9999
+                Thank you for your order
+                Subtotal Rs. 2,000
+                BUY 2 (-Rs. 500)
+                Free Shipping Above Rs1999
+                Total: Rs. 1,500
+            """.trimIndent(),
+            timestamp = 1L
+        )
+        assertNotNull(result)
+        assertEquals(1500.0, result!!.order.amount!!, 0.001)
     }
 
     @Test
@@ -208,6 +272,72 @@ class OrderParserTest {
             "Your order has been picked up by the shipper and will be delivered to you soon."
         )
         assertEquals(OrderStatus.IN_TRANSIT, status)
+    }
+
+    @Test
+    fun saeedGhaniShipmentSubjectIsInTransit() {
+        val status = OrderParser.detectStatus(
+            "A shipment from order #2856598 is on the way",
+            "M&P tracking number: 560678910101060. will be delivered to you soon."
+        )
+        assertEquals(OrderStatus.IN_TRANSIT, status)
+    }
+
+    @Test
+    fun saeedGhaniDispatchWithoutOrderNumberIsIgnored() {
+        val result = OrderParser.parse(
+            messageId = "<alerts@saeedghani.com>",
+            fromHeader = "Saeed Ghani <no-reply@alerts.saeedghani.com>",
+            subject = "Your Order Has Been Dispatched!",
+            body = """
+                Estimated delivery time is 3-6 working days.
+                Call or WhatsApp us at 02137130284.
+                Free Shipping Above Rs1999/-
+            """.trimIndent(),
+            timestamp = 1_700_000_450_000L
+        )
+        assertTrue(result == null)
+    }
+
+    @Test
+    fun saeedGhaniConfirmationAndShipShareStableId() {
+        val confirm = OrderParser.parse(
+            messageId = "<sg1@saeedghani1888.com>",
+            fromHeader = "Saeed Ghani <customercare@saeedghani1888.com>",
+            subject = "Order #2856598 confirmed",
+            body = """
+                Order #2856598
+                Thank you for your purchase!
+                Your order has been received and now in process.
+                Total Rs.1,386 PKR
+            """.trimIndent(),
+            timestamp = 1_700_000_400_000L
+        )
+        val ship = OrderParser.parse(
+            messageId = "<sg2@saeedghani1888.com>",
+            fromHeader = "Saeed Ghani <customercare@saeedghani1888.com>",
+            subject = "A shipment from order #2856598 is on the way",
+            body = """
+                Order #2856598
+                Your order has been picked up by the shipper and will be delivered to you soon.
+                M&P tracking number: 560678910101060
+            """.trimIndent(),
+            timestamp = 1_700_000_500_000L
+        )
+        assertNotNull(confirm)
+        assertNotNull(ship)
+        assertEquals(confirm!!.order.id, ship!!.order.id)
+        assertEquals("saeed ghani|2856598", confirm.order.id)
+        assertEquals(OrderStatus.PROCESSING, confirm.order.status)
+        assertEquals(OrderStatus.IN_TRANSIT, ship.order.status)
+        assertEquals("560678910101060", ship.order.trackingNumber)
+    }
+
+    @Test
+    fun ignoresPhoneAsTracking() {
+        assertTrue(OrderParser.isPhoneLike("02137130284"))
+        assertTrue(OrderParser.isPhoneLike("03001234567"))
+        assertTrue(!OrderParser.isPhoneLike("560678910101060"))
     }
 
     @Test

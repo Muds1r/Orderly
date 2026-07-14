@@ -3,8 +3,11 @@ package com.orderly.app.sync
 import android.content.Context
 import com.orderly.app.data.SettingsStore
 import com.orderly.app.data.db.AppDatabase
+import com.orderly.app.data.db.OrderEntity
+import com.orderly.app.data.db.OrderStatusMerge
 import com.orderly.app.data.db.ProcessedMessageEntity
 import com.orderly.app.data.mail.ImapClient
+import com.orderly.app.data.parser.OrderParser
 import com.orderly.app.data.tracking.LiveTrackingClient
 import com.orderly.app.data.tracking.PakCourier
 import kotlinx.coroutines.flow.first
@@ -21,7 +24,7 @@ import java.util.concurrent.atomic.AtomicLong
 object SyncEngine {
 
     const val LOOKBACK_DAYS = 365
-    const val SYNC_LOGIC_VERSION = 5
+    const val SYNC_LOGIC_VERSION = 8
     private val OVERLAP_MS = TimeUnit.DAYS.toMillis(1)
     private val generation = AtomicLong(0)
 
@@ -49,6 +52,12 @@ object SyncEngine {
         val email = settings.accountName.first() ?: return null
         val password = settings.appPassword.first() ?: return null
         val dao = AppDatabase.get(context).orderDao()
+
+        val marker = settings.syncMarker.first()
+        // New parser rules: re-read already-seen emails so amounts/status/duplicates fix.
+        if (marker != SYNC_LOGIC_VERSION) {
+            dao.deleteAllProcessed()
+        }
 
         val since = if (forceFull) lookbackCutoff() else sinceFor(settings)
         val results = ImapClient(email, password).fetchOrders(since)
@@ -100,9 +109,75 @@ object SyncEngine {
             throw SyncCancelledException()
         }
 
+        cleanupFoulAndDuplicateOrders(dao)
+
+        if (generation.get() != gen || settings.accountName.first() != email) {
+            throw SyncCancelledException()
+        }
+
         settings.setLastSync(System.currentTimeMillis())
         settings.setSyncMarker(SYNC_LOGIC_VERSION)
         return results.size
+    }
+
+    /**
+     * Drop phone-number "tracking" junk and merge same store+order # rows
+     * left over from older parsers.
+     */
+    private suspend fun cleanupFoulAndDuplicateOrders(dao: com.orderly.app.data.db.OrderDao) {
+        val all = dao.listAllOrders()
+        // Phone / hotline mistaken as CN (e.g. Saeed Ghani WhatsApp 021…)
+        all.filter { order ->
+            val cn = order.trackingNumber
+            !cn.isNullOrBlank() && OrderParser.isPhoneLike(cn) &&
+                (order.orderNumber.isNullOrBlank() || cn == order.orderNumber)
+        }.forEach { foul ->
+            dao.deleteEventsForOrder(foul.id)
+            dao.deleteOrderById(foul.id)
+        }
+
+        val remaining = dao.listAllOrders()
+        remaining
+            .filter { order -> !order.orderNumber.isNullOrBlank() }
+            .groupBy { order -> order.store.lowercase() to order.orderNumber!! }
+            .values
+            .filter { group -> group.size > 1 }
+            .forEach { group ->
+                val survivor = group.minWith(
+                    compareBy<OrderEntity> { if (it.id.startsWith("tracking|")) 1 else 0 }
+                        .thenBy { if (it.id.contains("|cn|")) 1 else 0 }
+                        .thenBy { it.orderDate }
+                )
+                group.filter { dup -> dup.id != survivor.id }.forEach { dup ->
+                    val events = dao.eventsForOrder(dup.id)
+                    events.forEach { ev ->
+                        dao.insertEventIgnore(
+                            ev.copy(
+                                id = "${survivor.id}|${ev.fingerprint}",
+                                orderId = survivor.id
+                            )
+                        )
+                    }
+                    dao.updateFields(
+                        id = survivor.id,
+                        productSummary = dup.productSummary,
+                        trackingNumber = dup.trackingNumber,
+                        carrier = dup.carrier,
+                        shipFrom = dup.shipFrom,
+                        lastLocation = dup.lastLocation,
+                        amount = dup.amount,
+                        currency = dup.currency,
+                        paymentStatus = dup.paymentStatus,
+                        status = OrderStatusMerge.prefer(survivor.status, dup.status),
+                        estimatedDelivery = dup.estimatedDelivery,
+                        subject = dup.subject.ifBlank { survivor.subject },
+                        lastMessageId = dup.lastMessageId,
+                        updatedAt = System.currentTimeMillis()
+                    )
+                    dao.deleteEventsForOrder(dup.id)
+                    dao.deleteOrderById(dup.id)
+                }
+            }
     }
 
     private suspend fun refreshLiveTracking(
