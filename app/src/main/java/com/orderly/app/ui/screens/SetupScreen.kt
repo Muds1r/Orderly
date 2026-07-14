@@ -67,7 +67,8 @@ fun SetupScreen(
             Spacer(modifier = Modifier.height(12.dp))
             Text(
                 "Reads shopping-order emails from Gmail (read-only) and keeps " +
-                    "all your purchases in one place — status, tracking, and history.",
+                    "all your purchases in one place — status, tracking, and history. " +
+                    "Works with any shop that emails you an order or tracking number.",
                 style = MaterialTheme.typography.bodyMedium,
                 textAlign = TextAlign.Center,
                 color = MaterialTheme.colorScheme.onSurfaceVariant

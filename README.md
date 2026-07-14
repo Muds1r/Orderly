@@ -41,8 +41,10 @@ Parsing lives in `data/parser/OrderParser.kt`.
 ## How it works
 
 - **Sync**: on demand and every 6 hours via WorkManager. Connects to
-  `imap.gmail.com`, searches All Mail for known store **and courier** domains,
-  parses each email, and upserts orders (keyed by store + order number when available).
+  `imap.gmail.com` and searches All Mail for **order/shipping keywords**
+  (any shop) plus known store/courier domains. Parses each email and upserts
+  orders (keyed by store + order number when available). Unknown shops use the
+  sender display name — you do **not** need to add every company domain.
 - **Live tracking**: after email sync, in-transit orders with a tracking number are
   refreshed against public PostEx / Leopards (and TCS when available) track pages so
   you get “arrived at …” style timeline updates on device.

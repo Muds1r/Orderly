@@ -1,15 +1,17 @@
 package com.orderly.app.data.mail
 
+import com.orderly.app.data.parser.CourierRegistry
 import com.orderly.app.data.parser.OrderParser
 import com.orderly.app.data.parser.StoreRegistry
-import com.orderly.app.data.parser.CourierRegistry
 import com.sun.mail.iap.Argument
 import com.sun.mail.iap.ProtocolException
 import com.sun.mail.imap.IMAPFolder
 import com.sun.mail.imap.protocol.IMAPResponse
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.text.SimpleDateFormat
 import java.util.Date
+import java.util.Locale
 import java.util.Properties
 import javax.mail.FetchProfile
 import javax.mail.Folder
@@ -23,12 +25,16 @@ import javax.mail.search.FromStringTerm
 import javax.mail.search.OrTerm
 import javax.mail.search.ReceivedDateTerm
 import javax.mail.search.SearchTerm
+import javax.mail.search.SubjectTerm
 
 /**
  * Fetches shopping-order emails from Gmail over IMAP using a Google App Password.
  *
- * No OAuth, no Google Cloud project — the app password works until revoked.
- * The folder is opened READ_ONLY, so nothing in the mailbox can be modified.
+ * Search is NOT limited to a fixed store list. Gmail is queried for:
+ *  - known store/courier domains (fast path), AND
+ *  - order/shipping keywords (so any XYZ shop works without adding its domain)
+ *
+ * The folder is opened READ_ONLY.
  */
 class ImapClient(private val email: String, private val appPassword: String) {
 
@@ -43,7 +49,7 @@ class ImapClient(private val email: String, private val appPassword: String) {
         store.close()
     }
 
-    /** Fetch and parse store order emails received after [sinceEpochMs]. */
+    /** Fetch and parse order / shipping emails received after [sinceEpochMs]. */
     suspend fun fetchOrders(sinceEpochMs: Long): List<OrderParser.ParseResult> =
         withContext(Dispatchers.IO) {
             val props = Properties().apply {
@@ -58,7 +64,7 @@ class ImapClient(private val email: String, private val appPassword: String) {
                 val folder = findAllMailFolder(store)
                 folder.open(Folder.READ_ONLY)
                 try {
-                    val messages = searchStoreMessages(folder, sinceEpochMs)
+                    val messages = searchOrderMessages(folder, sinceEpochMs)
                     val profile = FetchProfile().apply {
                         add(FetchProfile.Item.ENVELOPE)
                         add("Message-ID")
@@ -81,7 +87,7 @@ class ImapClient(private val email: String, private val appPassword: String) {
         return allMail ?: store.getFolder("INBOX")
     }
 
-    private fun searchStoreMessages(folder: Folder, sinceEpochMs: Long): List<Message> {
+    private fun searchOrderMessages(folder: Folder, sinceEpochMs: Long): List<Message> {
         if (folder is IMAPFolder) {
             try {
                 return gmailRawSearch(folder, sinceEpochMs).toList()
@@ -92,12 +98,16 @@ class ImapClient(private val email: String, private val appPassword: String) {
         return chunkedSearch(folder, sinceEpochMs)
     }
 
+    /**
+     * Known domains OR order/shipping keywords — any shop can match.
+     */
     private fun gmailRawSearch(folder: IMAPFolder, sinceEpochMs: Long): Array<Message> {
+        val afterDay = SimpleDateFormat("yyyy/MM/dd", Locale.US).format(Date(sinceEpochMs))
         val domains = (StoreRegistry.domainToStore.keys + CourierRegistry.allSearchDomains())
             .joinToString(" OR ")
-        val afterDay = java.text.SimpleDateFormat("yyyy/MM/dd", java.util.Locale.US)
-            .format(Date(sinceEpochMs))
-        val query = "from:($domains) after:$afterDay"
+        val keywords =
+            """("tracking number" OR "order number" OR "M&P tracking" OR "Leopards Courier tracking" OR subject:("order #" OR "your order" OR "has shipped" OR "on the way" OR "out for delivery" OR "order confirmation" OR shipped OR tracking OR dispatched OR shipment))"""
+        val query = "after:$afterDay ($keywords OR from:($domains)) -from:(foodpanda) -from:(newsletter)"
 
         @Suppress("UNCHECKED_CAST")
         val numbers = folder.doCommand { protocol ->
@@ -127,6 +137,15 @@ class ImapClient(private val email: String, private val appPassword: String) {
         val seen = mutableSetOf<Int>()
         val results = mutableListOf<Message>()
 
+        // Keyword subject search (unknown shops)
+        val subjectTerms = listOf(
+            "order", "shipped", "shipping", "tracking", "delivery", "on the way", "dispatched"
+        ).map { SubjectTerm(it) as SearchTerm }
+        folder.search(AndTerm(since, OrTerm(subjectTerms.toTypedArray()))).forEach { message ->
+            if (seen.add(message.messageNumber)) results.add(message)
+        }
+
+        // Known domains
         val domains = StoreRegistry.domainToStore.keys + CourierRegistry.allSearchDomains()
         domains.chunked(6).forEach { chunk ->
             val fromTerms = chunk.map { FromStringTerm(it) as SearchTerm }

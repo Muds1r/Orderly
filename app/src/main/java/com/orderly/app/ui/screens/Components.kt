@@ -1,6 +1,5 @@
 package com.orderly.app.ui.screens
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -44,6 +43,8 @@ import com.orderly.app.ui.theme.StatusDelivered
 import com.orderly.app.ui.theme.StatusInTransit
 import com.orderly.app.ui.theme.StatusProcessing
 
+private val CardShape = RoundedCornerShape(12.dp)
+
 @Composable
 fun SoftCard(
     modifier: Modifier = Modifier,
@@ -64,12 +65,11 @@ fun SoftCard(
         } else {
             modifier
         },
-        shape = RoundedCornerShape(16.dp),
+        shape = CardShape,
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.52f)
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
         ),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-        border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant),
         content = content
     )
 }
@@ -81,12 +81,11 @@ fun SoftHeroCard(
 ) {
     Card(
         modifier = modifier,
-        shape = RoundedCornerShape(20.dp),
+        shape = CardShape,
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)
+            containerColor = MaterialTheme.colorScheme.primaryContainer
         ),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-        border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)),
         content = content
     )
 }
@@ -102,7 +101,7 @@ fun RangeSelector(viewModel: MainViewModel) {
                 shape = SegmentedButtonDefaults.itemShape(index, RangePreset.entries.size),
                 label = { Text(preset.label) },
                 colors = SegmentedButtonDefaults.colors(
-                    inactiveContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.35f)
+                    inactiveContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh
                 )
             )
         }
@@ -124,24 +123,24 @@ fun OrderRow(
     SoftCard(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 6.dp),
+            .padding(horizontal = 16.dp, vertical = 5.dp),
         onClick = onClick,
         content = {
             Row(
-                modifier = Modifier.padding(16.dp),
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Box(
                     modifier = Modifier
                         .size(40.dp)
                         .clip(CircleShape)
-                        .background(statusColor(order.status).copy(alpha = 0.15f)),
+                        .background(statusColor(order.status).copy(alpha = 0.12f)),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
                         order.store.take(1).uppercase(),
                         style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
+                        fontWeight = FontWeight.SemiBold,
                         color = statusColor(order.status)
                     )
                 }
@@ -156,7 +155,15 @@ fun OrderRow(
                     )
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
-                        "${order.store} · ${statusLabel(order.status)}",
+                        buildString {
+                            append(order.store)
+                            append(" · ")
+                            append(statusLabel(order.status))
+                            order.lastLocation?.takeIf { it.isNotBlank() }?.let {
+                                append(" · ")
+                                append(it)
+                            }
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,

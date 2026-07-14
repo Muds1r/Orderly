@@ -12,13 +12,19 @@ import com.orderly.app.data.tracking.PakCourier
 object OrderParser {
 
     private val orderNumberRegexes = listOf(
-        Regex("""\border\s*(?:number|#|no\.?|id)?\s*[:#]?\s*([A-Z0-9][A-Z0-9\-]{5,})\b""", RegexOption.IGNORE_CASE),
+        Regex("""\border\s*(?:number|#|no\.?|id)?\s*[:#]?\s*([A-Z0-9][A-Z0-9\-]{3,})\b""", RegexOption.IGNORE_CASE),
+        Regex("""\border\s+#?\s*(\d{4,})\b""", RegexOption.IGNORE_CASE),
         Regex("""\border\s+([A-Z0-9]{3}-\d{7}-\d{7})\b""", RegexOption.IGNORE_CASE),
-        Regex("""\b(?:ORD|ORDER)[-_]?([A-Z0-9]{6,})\b""", RegexOption.IGNORE_CASE),
-        Regex("""\b#([A-Z0-9]{8,})\b""")
+        Regex("""\b(?:ORD|ORDER)[-_]?([A-Z0-9]{4,})\b""", RegexOption.IGNORE_CASE),
+        Regex("""\b#(\d{4,})\b""")
     )
 
     private val trackingRegexes = listOf(
+        // "M&P tracking number: …" / "Leopards Courier tracking number: …"
+        Regex(
+            """(?:M\s*&\s*P|Leopards(?:\s+Courier)?|PostEx|TCS|Trax|Mulphilog)\s+tracking\s*(?:number|#|no\.?)?\s*[:#]?\s*([A-Z0-9\-]{8,})\b""",
+            RegexOption.IGNORE_CASE
+        ),
         Regex("""\btracking\s*(?:number|#|no\.?|cn|consignment)?\s*[:#]?\s*([A-Z0-9\-]{8,})\b""", RegexOption.IGNORE_CASE),
         Regex("""\b(?:CN|AWB|consignment)\s*(?:number|#|no\.?)?\s*[:#]?\s*([A-Z0-9\-]{8,})\b""", RegexOption.IGNORE_CASE),
         Regex(
@@ -27,6 +33,8 @@ object OrderParser {
         ),
         Regex("""\b((?:PE|CX)[-]?[A-Z0-9]{8,})\b""", RegexOption.IGNORE_CASE),
         Regex("""\b(77\d{11})\b"""),
+        // M&P / generic long numeric CN (10–20 digits), used after labeled forms fail
+        Regex("""\b(\d{10,20})\b"""),
         Regex("""\b(?:1Z[A-Z0-9]{16})\b""")
     )
 
@@ -85,17 +93,22 @@ object OrderParser {
         body: String,
         timestamp: Long
     ): ParseResult? {
-        val store = StoreRegistry.storeFromSender(fromHeader)
+        val knownStore = StoreRegistry.storeFromSender(fromHeader)
+        val store = StoreRegistry.resolveStoreName(fromHeader)
         val courierFromDomain = CourierRegistry.courierFromSender(fromHeader)
         val text = (subject + "\n" + body).replace('\u00a0', ' ')
         val lower = text.lowercase()
+        val subjectLower = subject.lowercase()
+
+        // Drop foodpanda / promo / voucher mail early.
+        if (isPromoOrUnrelated(fromHeader, subjectLower, lower)) return null
 
         val status = detectStatus(subject, lower)
         val orderNumber = extractOrderNumber(text, subject)
         val trackingRaw = extractTracking(text, orderNumber)
         val tracking = trackingRaw?.let { PakCourier.normalizeCn(it) }
 
-        // Courier-only mail (PostEx / TCS / Leopards) without a store match.
+        // Pure courier notification with no shop name — attach by tracking # later.
         if (store == null) {
             if (courierFromDomain == null && tracking == null) return null
             if (tracking == null && status == OrderStatus.UNKNOWN) return null
@@ -111,9 +124,14 @@ object OrderParser {
             )
         }
 
-        if (orderNumber == null && status == OrderStatus.UNKNOWN && !looksLikeOrderMail(lower)) {
-            return null
-        }
+        // Real orders need an order # and/or a tracking #.
+        // Promo blasts that only say "order food" / "% off" never qualify.
+        val looksLike = looksLikeOrderMail(lower)
+        val hasIdentity = orderNumber != null || tracking != null
+        if (!hasIdentity) return null
+        if (!looksLike && status == OrderStatus.UNKNOWN) return null
+        // Unknown shops: require shipping/order language, not just a random #.
+        if (knownStore == null && !looksLikeStrict(lower, subjectLower)) return null
 
         val amount = extractAmount(text)
         val product = extractProduct(text, subject)
@@ -181,6 +199,46 @@ object OrderParser {
         return ParseResult(order, messageId, events)
     }
 
+    /** Foodpanda deals, vouchers, % off — never treat as purchase archive rows. */
+    fun isPromoOrUnrelated(fromHeader: String, subjectLower: String, bodyLower: String): Boolean {
+        val from = fromHeader.lowercase()
+        val blockedSenders = listOf(
+            "foodpanda", "pandamart", "careem", "bykea", "uber.com",
+            "mcdonalds", "kfc.", "pizza hut", "domino", "newsletter@",
+            "marketing@", "promo@", "offers@", "deals@"
+        )
+        if (blockedSenders.any { it in from }) return true
+
+        val promoSubject = listOf(
+            "% off", "%off", "off on", "discount", "voucher", "coupon",
+            "flash sale", "limited offer", "free delivery on", "order now and",
+            "offering", "promo code", "use code", "deal of", "cashback offer"
+        )
+        if (promoSubject.any { it in subjectLower }) return true
+
+        // Subject is clearly marketing with no order identity language
+        val orderishSubject = listOf(
+            "order #", "order number", "your order", "has shipped", "on the way",
+            "tracking", "out for delivery", "delivered", "dispatched", "shipment"
+        )
+        if (promoSubject.any { it in bodyLower.take(400) } &&
+            orderishSubject.none { it in subjectLower } &&
+            "tracking number" !in bodyLower
+        ) {
+            return true
+        }
+        return false
+    }
+
+    private fun looksLikeStrict(lower: String, subjectLower: String): Boolean {
+        val strict = listOf(
+            "tracking number", "order number", "order #", "your order",
+            "has shipped", "on the way", "out for delivery", "consignment",
+            "m&p tracking", "leopards courier", "postex", "shipped"
+        )
+        return strict.any { it in lower || it in subjectLower }
+    }
+
     private fun parseCourierUpdate(
         messageId: String,
         subject: String,
@@ -244,21 +302,44 @@ object OrderParser {
     }
 
     fun detectStatus(subject: String, lowerBody: String): OrderStatus {
+        val sub = subject.lowercase()
         val s = (subject + " " + lowerBody).lowercase()
+
+        // Subject wins for clear shipping lifecycle (avoids body noise like "will be delivered").
+        when {
+            listOf("cancelled", "canceled").any { it in sub } -> return OrderStatus.CANCELLED
+            listOf("out for delivery", "arriving today").any { it in sub } ->
+                return OrderStatus.OUT_FOR_DELIVERY
+            listOf("was delivered", "has been delivered", "delivered successfully", "package delivered")
+                .any { it in sub } -> return OrderStatus.DELIVERED
+            listOf("on the way", "on its way", "in transit", "shipment from").any { it in sub } ->
+                return OrderStatus.IN_TRANSIT
+            listOf("has shipped", "order shipped", "dispatched").any { it in sub } ->
+                return OrderStatus.SHIPPED
+            listOf("order confirmed", "thanks for your order", "order placed").any { it in sub } ->
+                return OrderStatus.PROCESSING
+        }
+
         return when {
             listOf("cancelled", "canceled", "order cancel").any { it in s } -> OrderStatus.CANCELLED
-            listOf("returned", "return received", "refund").any { it in s } &&
-                "return" in s -> OrderStatus.RETURNED
+            listOf("returned", "return received").any { it in s } && "refund" !in sub ->
+                OrderStatus.RETURNED
             listOf("out for delivery", "arriving today").any { it in s } -> OrderStatus.OUT_FOR_DELIVERY
-            listOf("delayed", "exception", "delivery attempt").any { it in s } -> OrderStatus.DELAYED
-            listOf("delivered", "was delivered", "has been delivered", "delivered successfully")
-                .any { it in s } -> OrderStatus.DELIVERED
+            listOf("delayed", "delivery attempt failed").any { it in s } -> OrderStatus.DELAYED
+            // Only past-tense / confirmed delivery — never "will be delivered soon"
+            listOf(
+                "was delivered", "has been delivered", "delivered successfully",
+                "package delivered", "order delivered", "your package was delivered",
+                "delivered to you", "successfully delivered"
+            ).any { it in s } &&
+                !Regex("""\b(will be|to be|soon be)\s+delivered\b""").containsMatchIn(s) ->
+                OrderStatus.DELIVERED
             listOf(
                 "in transit", "on the way", "on its way", "arrived at", "reached",
-                "departed", "scanned at"
+                "departed", "scanned at", "picked up by the shipper"
             ).any { it in s } -> OrderStatus.IN_TRANSIT
-            listOf("shipped", "dispatched", "has shipped", "on the way to you", "picked up")
-                .any { it in s } -> OrderStatus.SHIPPED
+            listOf("shipped", "dispatched", "has shipped", "picked up").any { it in s } ->
+                OrderStatus.SHIPPED
             listOf("awaiting payment", "payment pending", "complete your payment").any { it in s } ->
                 OrderStatus.AWAITING_PAYMENT
             listOf("payment received", "payment confirmed", "we've received your payment").any { it in s } ->
@@ -283,9 +364,14 @@ object OrderParser {
 
     private fun extractTracking(text: String, orderNumber: String?): String? {
         for (regex in trackingRegexes) {
-            regex.find(text)?.groupValues?.get(1)?.let { candidate ->
-                val cleaned = PakCourier.normalizeCn(cleanToken(candidate))
-                if (cleaned != orderNumber && cleaned.length >= 8) return cleaned
+            regex.findAll(text).forEach { match ->
+                val cleaned = PakCourier.normalizeCn(cleanToken(match.groupValues[1]))
+                if (cleaned.equals(orderNumber, ignoreCase = true)) return@forEach
+                if (cleaned.length < 8) return@forEach
+                // Skip Pakistani mobile numbers mistaken for CNs
+                if (cleaned.matches(Regex("""03\d{9}"""))) return@forEach
+                if (cleaned.matches(Regex("""92\d{10}"""))) return@forEach
+                return cleaned
             }
         }
         return null

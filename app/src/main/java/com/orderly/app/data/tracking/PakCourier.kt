@@ -21,7 +21,7 @@ enum class PakCourier(val displayName: String) {
             LEOPARDS -> "https://pk.leopardscourier.com/tracking"
             PAKISTAN_POST -> "https://ep.gov.pk/track.asp"
             TRAX -> "https://trax.pk/"
-            MNP -> "https://mulphilog.com/"
+            MNP -> "https://www.mulphilog.com/tracking/${cn.encode()}"
             UNKNOWN -> null
         }
     }
@@ -57,21 +57,23 @@ enum class PakCourier(val displayName: String) {
                 listOf("pakistan post", "pakpost", "ep.gov.pk").any { it in text } ->
                     return PAKISTAN_POST
                 listOf("trax courier", "trax.pk").any { it in text } -> return TRAX
-                listOf("m&p", "mulphilog", "mnp courier").any { it in text } -> return MNP
+                listOf("m&p", "m & p", "mulphilog", "mnp courier", "m&p tracking").any { it in text } ->
+                    return MNP
             }
 
             if (cn.isBlank()) return UNKNOWN
 
             return when {
                 // PostEx: PE… or CX-…
-                cn.startsWith("PE") || cn.startsWith("CX-") || cn.startsWith("CX") && cn.length in 10..20 ->
-                    POSTEX
+                cn.startsWith("PE") || cn.startsWith("CX-") ||
+                    (cn.startsWith("CX") && cn.length in 10..20) -> POSTEX
                 // TCS: 13 digits often starting with 777 / 77
-                cn.matches(Regex("""77\d{11}""")) || cn.matches(Regex("""\d{11,13}""")) && cn.startsWith("77") ->
-                    TCS
-                // Leopards: 2 letters + 10 digits (GT7514208669)
+                cn.matches(Regex("""77\d{11}""")) -> TCS
+                // Leopards: 2 letters + 9–12 digits (GT7514208669, CC7527356953)
                 cn.matches(Regex("""[A-Z]{2}\d{9,12}""")) -> LEOPARDS
                 cn.startsWith("TRX") -> TRAX
+                // M&P often uses long numeric CNs (not starting with 77)
+                cn.matches(Regex("""\d{12,20}""")) && !cn.startsWith("77") -> MNP
                 else -> UNKNOWN
             }
         }

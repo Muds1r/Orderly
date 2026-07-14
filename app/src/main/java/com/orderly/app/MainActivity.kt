@@ -14,7 +14,9 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.background
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Logout
@@ -28,7 +30,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarDefaults
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -145,7 +146,7 @@ private fun App() {
         navController.navigate("order/${Uri.encode(id)}")
     }
 
-    val barContainer = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.72f)
+    val barContainer = MaterialTheme.colorScheme.surfaceContainerHigh
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -209,18 +210,10 @@ private fun App() {
         bottomBar = {
             if (!isDetail) {
                 Column(modifier = Modifier.fillMaxWidth()) {
-                    Text(
-                        "Made By Muds1r",
-                        modifier = Modifier
-                            .align(Alignment.CenterHorizontally)
-                            .padding(top = 4.dp, bottom = 2.dp),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f)
-                    )
                     NavigationBar(
                         windowInsets = WindowInsets(0),
                         containerColor = barContainer,
-                        tonalElevation = NavigationBarDefaults.Elevation
+                        tonalElevation = 0.dp
                     ) {
                         tabs.forEach { tab ->
                             NavigationBarItem(
@@ -237,6 +230,16 @@ private fun App() {
                             )
                         }
                     }
+                    Text(
+                        "Made By Muds1r",
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(barContainer)
+                            .padding(top = 2.dp, bottom = 10.dp),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f),
+                        textAlign = TextAlign.Center
+                    )
                 }
             }
         }

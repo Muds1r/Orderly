@@ -41,11 +41,12 @@ object LiveTrackingClient {
             when (courier) {
                 PakCourier.POSTEX -> trackPostEx(cn)
                 PakCourier.LEOPARDS -> trackLeopards(cn)
+                PakCourier.MNP -> trackMnP(cn)
                 PakCourier.TCS -> trackTcsBestEffort(cn)
-                PakCourier.PAKISTAN_POST -> null // form + captcha; email timeline only
+                PakCourier.PAKISTAN_POST -> null
                 else -> {
-                    // Try PostEx then Leopards when shape is ambiguous.
-                    trackPostEx(cn) ?: trackLeopards(cn)
+                    // Ambiguous numeric CNs: try M&P then PostEx then Leopards.
+                    trackMnP(cn) ?: trackPostEx(cn) ?: trackLeopards(cn)
                 }
             }
         }
@@ -214,8 +215,77 @@ object LiveTrackingClient {
     }
 
     /**
+     * Public consumer page: https://www.mulphilog.com/tracking/{cn}
+     * Timeline steps: date, status (Booked / In Transit / …), location, message.
+     */
+    private fun trackMnP(cn: String): LiveTrackingResult? {
+        val html = httpGet(
+            "https://www.mulphilog.com/tracking/$cn",
+            mutableListOf(),
+            acceptJson = false
+        ) ?: return null
+        if ("No tracking record found" in html) return null
+
+        val statuses = Regex(
+            """class="order-track-text-stat status"[^>]*>\s*([^<]+)""",
+            RegexOption.IGNORE_CASE
+        ).findAll(html).map { it.groupValues[1].trim() }.toList()
+        val locations = Regex(
+            """class="order-track-text-stat location"[^>]*>\s*([^<]+)""",
+            RegexOption.IGNORE_CASE
+        ).findAll(html).map { it.groupValues[1].trim() }.toList()
+        val messages = Regex(
+            """class="order-track-text-stat status-message"[^>]*>\s*([^<]+)""",
+            RegexOption.IGNORE_CASE
+        ).findAll(html).map { it.groupValues[1].trim() }.toList()
+        val dates = Regex(
+            """class="order-track-text-sub[^"]*"[^>]*>\s*(.*?)\s*</span>""",
+            setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
+        ).findAll(html).map {
+            it.groupValues[1].replace(Regex("<[^>]+>"), " ")
+                .replace(Regex("""\s+"""), " ")
+                .trim()
+        }.toList()
+
+        if (statuses.isEmpty()) return null
+
+        val events = mutableListOf<TrackingEventDraft>()
+        for (i in statuses.indices) {
+            val statusLabel = statuses[i]
+            val location = locations.getOrNull(i)?.ifBlank { null }
+            val message = messages.getOrNull(i)?.ifBlank { null }
+            val whenMs = parseFlexibleDate(dates.getOrNull(i)) ?: System.currentTimeMillis()
+            val mapped = statusFromText(statusLabel + " " + (message ?: ""))
+            val description = buildString {
+                append(statusLabel)
+                if (!message.isNullOrBlank() && !message.equals(statusLabel, ignoreCase = true)) {
+                    append(" — ")
+                    append(message.take(120))
+                }
+            }
+            events += TrackingEventDraft(
+                occurredAt = whenMs,
+                status = mapped,
+                location = location,
+                description = description,
+                source = "live",
+                fingerprint = "mnp|$cn|$statusLabel|$location|$whenMs".hashFingerprint()
+            )
+        }
+
+        val latest = events.maxByOrNull { it.occurredAt }
+        return LiveTrackingResult(
+            carrier = PakCourier.MNP,
+            events = events.sortedByDescending { it.occurredAt },
+            origin = locations.lastOrNull(),
+            destination = null,
+            currentStatus = latest?.status,
+            lastLocation = latest?.location
+        )
+    }
+
+    /**
      * TCS consumer site no longer exposes a stable public JSON endpoint without auth.
-     * We still return a stub so the UI can open the carrier site; email sync fills events.
      */
     private fun trackTcsBestEffort(cn: String): LiveTrackingResult? {
         return try {
@@ -303,12 +373,13 @@ object LiveTrackingClient {
     private fun statusFromText(text: String): OrderStatus {
         val s = text.lowercase()
         return when {
-            "delivered" in s -> OrderStatus.DELIVERED
+            "delivered" in s || "received by" in s -> OrderStatus.DELIVERED
             "out for delivery" in s || "out-for-delivery" in s -> OrderStatus.OUT_FOR_DELIVERY
-            "delay" in s || "attempt" in s || "exception" in s -> OrderStatus.DELAYED
+            "delay" in s || "attempt" in s || "exception" in s || "hold" in s -> OrderStatus.DELAYED
             "return" in s || "cancel" in s -> OrderStatus.RETURNED
+            "booked" in s || "placed" in s || "prepared for shipment" in s -> OrderStatus.PROCESSING
             "transit" in s || "arrived" in s || "departed" in s || "facility" in s ||
-                "on the way" in s -> OrderStatus.IN_TRANSIT
+                "on the way" in s || "karachi" in s && "booked" !in s -> OrderStatus.IN_TRANSIT
             "shipped" in s || "dispatched" in s || "picked" in s -> OrderStatus.SHIPPED
             else -> OrderStatus.IN_TRANSIT
         }

@@ -3,7 +3,6 @@ package com.orderly.app.sync
 import android.content.Context
 import com.orderly.app.data.SettingsStore
 import com.orderly.app.data.db.AppDatabase
-import com.orderly.app.data.db.OrderStatusMerge
 import com.orderly.app.data.db.ProcessedMessageEntity
 import com.orderly.app.data.mail.ImapClient
 import com.orderly.app.data.tracking.LiveTrackingClient
@@ -22,7 +21,7 @@ import java.util.concurrent.atomic.AtomicLong
 object SyncEngine {
 
     const val LOOKBACK_DAYS = 365
-    const val SYNC_LOGIC_VERSION = 2
+    const val SYNC_LOGIC_VERSION = 5
     private val OVERLAP_MS = TimeUnit.DAYS.toMillis(1)
     private val generation = AtomicLong(0)
 
@@ -122,17 +121,15 @@ object SyncEngine {
             val live = runCatching { LiveTrackingClient.track(tracking, hint) }.getOrNull()
                 ?: continue
 
-            val mergedStatus = live.currentStatus?.let {
-                OrderStatusMerge.prefer(order.status, it)
-            }
-
+            // Live courier status is authoritative (fixes false "Delivered" from email wording).
             dao.applyTrackingUpdate(
                 orderId = order.id,
                 carrier = live.carrier.displayName,
                 shipFrom = live.origin,
                 lastLocation = live.lastLocation ?: live.destination,
-                status = mergedStatus,
-                events = live.events
+                status = live.currentStatus,
+                events = live.events,
+                forceStatus = true
             )
         }
     }

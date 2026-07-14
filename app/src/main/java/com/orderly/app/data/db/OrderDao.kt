@@ -227,13 +227,15 @@ interface OrderDao {
         shipFrom: String?,
         lastLocation: String?,
         status: OrderStatus?,
-        events: List<TrackingEventDraft>
+        events: List<TrackingEventDraft>,
+        /** When true (live courier refresh), courier status replaces email guesses. */
+        forceStatus: Boolean = false
     ) {
         val existing = getById(orderId) ?: return
-        val mergedStatus = if (status != null) {
-            OrderStatusMerge.prefer(existing.status, status)
-        } else {
-            existing.status
+        val mergedStatus = when {
+            status == null -> existing.status
+            forceStatus -> status
+            else -> OrderStatusMerge.prefer(existing.status, status)
         }
         updateTrackingSnapshot(
             id = orderId,
