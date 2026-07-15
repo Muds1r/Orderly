@@ -25,7 +25,7 @@ import java.util.concurrent.atomic.AtomicLong
 object SyncEngine {
 
     const val LOOKBACK_DAYS = 365
-    const val SYNC_LOGIC_VERSION = 9
+    const val SYNC_LOGIC_VERSION = 10
     private val OVERLAP_MS = TimeUnit.DAYS.toMillis(1)
     private val generation = AtomicLong(0)
 

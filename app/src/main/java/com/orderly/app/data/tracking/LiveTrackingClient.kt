@@ -172,20 +172,29 @@ object LiveTrackingClient {
             val location = LocationNames.fromTrackingText(plain)
             val status = statusFromText(plain)
             val whenMs = parseFlexibleDate(plain) ?: 0L
-            val desc = plain.take(180)
+            val desc = cleanLiveDescription(plain)
+            // Prefer real checkpoint time; never stamp all events with "now" (that breaks sort).
+            val occurredAt = when {
+                whenMs > 0L -> whenMs
+                else -> 0L
+            }
+            if (occurredAt == 0L && desc.isBlank()) continue
             events += TrackingEventDraft(
-                occurredAt = if (whenMs > 0) whenMs else System.currentTimeMillis(),
+                occurredAt = occurredAt,
                 status = status,
                 location = location,
-                description = desc,
+                description = desc.ifBlank { plain.take(120) },
                 source = "live",
-                // Stable fingerprint — no wall-clock time (avoids duplicates on every sync)
-                fingerprint = "lcs|$cn|${status.name}|${location.orEmpty()}|${desc.take(80)}".hashFingerprint()
+                fingerprint = "lcs|$cn|${status.name}|${location.orEmpty()}|${desc.take(80).ifBlank { plain.take(80) }}".hashFingerprint()
             )
         }
 
+        // If some dates failed to parse, order by scraped sequence then known times.
+        // Unparsed (0) go before parsed of unknown… better: assign relative times from HTML order.
+        val withTimes = assignMissingTimesPreservingOrder(events)
+
         // Fallback: current status line
-        if (events.isEmpty()) {
+        if (withTimes.isEmpty()) {
             val current = Regex(
                 """Current Status/Reason\s*:?\s*</[^>]+>\s*<[^>]+>\s*([^<]+)""",
                 setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
@@ -193,22 +202,31 @@ object LiveTrackingClient {
                 ?: Regex("""Arrived|Delivered|In Transit|Out for Delivery""", RegexOption.IGNORE_CASE)
                     .find(html)?.value
             if (!current.isNullOrBlank()) {
-                events += TrackingEventDraft(
-                    occurredAt = System.currentTimeMillis(),
-                    status = statusFromText(current),
-                    location = LocationNames.sanitize(destination) ?: LocationNames.sanitize(origin),
-                    description = current,
-                    source = "live",
-                    fingerprint = "lcs|$cn|current|$current".hashFingerprint()
+                return LiveTrackingResult(
+                    carrier = PakCourier.LEOPARDS,
+                    events = listOf(
+                        TrackingEventDraft(
+                            occurredAt = System.currentTimeMillis(),
+                            status = statusFromText(current),
+                            location = LocationNames.sanitize(destination) ?: LocationNames.sanitize(origin),
+                            description = cleanLiveDescription(current),
+                            source = "live",
+                            fingerprint = "lcs|$cn|current|$current".hashFingerprint()
+                        )
+                    ),
+                    origin = LocationNames.sanitize(origin),
+                    destination = LocationNames.sanitize(destination),
+                    currentStatus = statusFromText(current),
+                    lastLocation = LocationNames.sanitize(destination) ?: LocationNames.sanitize(origin)
                 )
             }
         }
 
-        if (events.isEmpty() && origin == null && destination == null) return null
-        val latest = events.maxByOrNull { it.occurredAt }
+        if (withTimes.isEmpty() && origin == null && destination == null) return null
+        val latest = withTimes.maxByOrNull { it.occurredAt }
         return LiveTrackingResult(
             carrier = PakCourier.LEOPARDS,
-            events = events.sortedByDescending { it.occurredAt },
+            events = withTimes.sortedBy { it.occurredAt },
             origin = LocationNames.sanitize(origin),
             destination = LocationNames.sanitize(destination),
             currentStatus = latest?.status,
@@ -438,10 +456,23 @@ object LiveTrackingClient {
     private fun parseFlexibleDate(raw: String?): Long? {
         if (raw.isNullOrBlank()) return null
         val cleaned = raw.trim()
-        // epoch millis / seconds
         cleaned.toLongOrNull()?.let { n ->
             return if (n < 10_000_000_000L) n * 1000 else n
         }
+
+        // Leopards embeds: "14 July, 2026 (20:32) Dispatched to ISLAMABAD"
+        val embedded = Regex(
+            """(\d{1,2}\s+(?:January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\.?,?\s*\d{4}\s*\(?\s*\d{1,2}:\d{2}\s*(?:am|pm|a\.m\.|p\.m\.)?\s*\)?)""",
+            RegexOption.IGNORE_CASE
+        ).find(cleaned)?.groupValues?.get(1)
+
+        val candidates = buildList {
+            embedded?.let { add(normalizeDateSnippet(it)) }
+            add(normalizeDateSnippet(cleaned))
+            // Also try first ~40 chars when the string is a long status line
+            if (cleaned.length > 40) add(normalizeDateSnippet(cleaned.take(40)))
+        }.distinct()
+
         val patterns = listOf(
             "yyyy-MM-dd'T'HH:mm:ss",
             "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'",
@@ -451,24 +482,92 @@ object LiveTrackingClient {
             "MMM dd, yyyy HH:mm",
             "dd-MM-yyyy HH:mm",
             "dd/MM/yyyy HH:mm",
+            "d MMMM yyyy HH:mm",
+            "dd MMMM yyyy HH:mm",
+            "d MMMM, yyyy HH:mm",
+            "dd MMMM, yyyy HH:mm",
+            "d MMM yyyy HH:mm",
+            "dd MMM yyyy HH:mm",
             "d MMM yyyy, h:mm a",
             "d MMM yyyy h:mm a",
             "dd MMM yyyy h:mm a",
             "dd MMM yyyy, h:mm a",
-            "d MMM yyyy HH:mm",
-            "dd MMM yyyy HH:mm"
+            "d MMM yyyy, HH:mm",
+            "d MMMM yyyy, HH:mm",
+            "d MMM yyyy HH:mm:ss",
+            "d MMMM yyyy h:mm a"
         )
-        for (p in patterns) {
-            try {
-                val fmt = SimpleDateFormat(p, Locale.US).apply {
-                    isLenient = true
-                    timeZone = TimeZone.getDefault()
+        for (candidate in candidates) {
+            for (p in patterns) {
+                try {
+                    val fmt = SimpleDateFormat(p, Locale.US).apply {
+                        isLenient = true
+                        timeZone = TimeZone.getDefault()
+                    }
+                    fmt.parse(candidate)?.time?.let { return it }
+                } catch (_: Exception) {
                 }
-                fmt.parse(cleaned)?.time?.let { return it }
-            } catch (_: Exception) {
             }
         }
         return null
+    }
+
+    /** "14 July, 2026 (20:32)" → "14 July 2026 20:32" */
+    private fun normalizeDateSnippet(raw: String): String =
+        raw.trim()
+            .replace(",", " ")
+            .replace("(", " ")
+            .replace(")", " ")
+            .replace(Regex("""\s+"""), " ")
+            .trim()
+
+    /** Drop embedded date from courier status lines for cleaner timeline titles. */
+    private fun cleanLiveDescription(plain: String): String {
+        val withoutDate = plain.replace(
+            Regex(
+                """\d{1,2}\s+(?:January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\.?,?\s*\d{4}\s*\(?\s*\d{1,2}:\d{2}\s*(?:am|pm)?\s*\)?\s*""",
+                RegexOption.IGNORE_CASE
+            ),
+            ""
+        )
+        return withoutDate.replace(Regex("""\s+"""), " ").trim().take(180)
+    }
+
+    /**
+     * HTML scrape order is usually newest-first. Fill missing dates so ASC sorting
+     * still keeps relative order among siblings when only some timestamps parse.
+     */
+    private fun assignMissingTimesPreservingOrder(
+        events: List<TrackingEventDraft>
+    ): List<TrackingEventDraft> {
+        if (events.isEmpty()) return events
+        // Scrape order is typically newest → oldest for Leopards cards.
+        val newestFirst = events
+        val known = newestFirst.mapIndexedNotNull { i, e ->
+            if (e.occurredAt > 0L) i to e.occurredAt else null
+        }
+        if (known.isEmpty()) {
+            // No dates: space them 1 minute apart ending at now (oldest last in list = earlier)
+            val now = System.currentTimeMillis()
+            return newestFirst.mapIndexed { i, e ->
+                e.copy(occurredAt = now - i * 60_000L)
+            }
+        }
+        return newestFirst.mapIndexed { i, e ->
+            if (e.occurredAt > 0L) e
+            else {
+                // Interpolate between neighbors or offset from nearest known
+                val before = known.lastOrNull { it.first < i }?.second
+                val after = known.firstOrNull { it.first > i }?.second
+                val guessed = when {
+                    before != null && after != null -> (before + after) / 2
+                    before != null -> before - 60_000L
+                    after != null -> after + 60_000L
+                    else -> System.currentTimeMillis()
+                }
+                e.copy(occurredAt = guessed)
+            }
+        }
     }
 
     private fun String.encode(): String =
@@ -476,4 +575,7 @@ object LiveTrackingClient {
 
     private fun String.hashFingerprint(): String =
         Integer.toHexString(hashCode())
+
+    /** Exposed for unit tests. */
+    fun parseDateForTest(raw: String): Long? = parseFlexibleDate(raw)
 }
