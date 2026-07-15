@@ -35,7 +35,6 @@ fun DashboardScreen(
     val inTransit by viewModel.inTransitOrders.collectAsState()
     val delayed by viewModel.delayedOrders.collectAsState()
     val delivered by viewModel.recentlyDelivered.collectAsState()
-    val watched by viewModel.watchedOrders.collectAsState()
     val monthSpent by viewModel.monthSpent.collectAsState()
     val monthCount by viewModel.monthOrderCount.collectAsState()
     val lastSync by viewModel.lastSync.collectAsState()
@@ -100,13 +99,6 @@ fun DashboardScreen(
                 Spacer(modifier = Modifier.height(8.dp))
             }
 
-            if (watched.isNotEmpty()) {
-                item { SectionHeader("Watched") }
-                items(watched.take(6), key = { "w-${it.id}" }) { order ->
-                    OrderRow(order) { onOrderClick(order.id) }
-                }
-            }
-
             if (delayed.isNotEmpty()) {
                 item { SectionHeader("Delayed") }
                 items(delayed.take(5), key = { it.id }) { order ->
@@ -135,7 +127,7 @@ fun DashboardScreen(
                 }
             }
 
-            if (active.isEmpty() && delivered.isEmpty() && watched.isEmpty()) {
+            if (active.isEmpty() && delivered.isEmpty()) {
                 item {
                     EmptyState("No orders yet. Pull down to sync Gmail.")
                 }

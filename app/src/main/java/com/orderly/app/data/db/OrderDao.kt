@@ -482,7 +482,7 @@ interface OrderDao {
     @Query("UPDATE orders SET deletedAt = :deletedAt WHERE id = :id")
     suspend fun setDeletedAt(id: String, deletedAt: Long?)
 
-    @Query("UPDATE orders SET lastLiveCheckAt = :at, updatedAt = :at WHERE id = :id")
+    @Query("UPDATE orders SET lastLiveCheckAt = :at WHERE id = :id")
     suspend fun setLastLiveCheckAt(id: String, at: Long)
 
     @Query(

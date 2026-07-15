@@ -54,8 +54,11 @@ fun OrderDetailScreen(
     val refresh by viewModel.trackingRefresh.collectAsState()
     val context = LocalContext.current
 
-    LaunchedEffect(orderId) {
+    LaunchedEffect(orderId, order?.trackingNumber) {
         viewModel.clearTrackingRefresh()
+        if (!order?.trackingNumber.isNullOrBlank()) {
+            viewModel.refreshTracking(orderId)
+        }
     }
 
     if (order == null) {
@@ -110,22 +113,22 @@ fun OrderDetailScreen(
                     style = MaterialTheme.typography.headlineSmall,
                     fontWeight = FontWeight.SemiBold
                 )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    "Last live check · " +
+                        (order.lastLiveCheckAt?.let { formatDateTime(it) } ?: "Not checked yet"),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f)
+                )
             }
         }
 
         Spacer(modifier = Modifier.height(12.dp))
-        Row(modifier = Modifier.fillMaxWidth()) {
-            TextButton(onClick = {
-                context.startActivity(
-                    Intent.createChooser(OrderShare.shareIntent(order), "Share order")
-                )
-            }) { Text("Share") }
-            TextButton(onClick = { viewModel.toggleWatched(order.id, order.watched) }) {
-                Text(if (order.watched) "Unwatch" else "Watch")
-            }
-            TextButton(onClick = { viewModel.hideOrder(order.id) }) { Text("Hide") }
-            TextButton(onClick = { viewModel.softDeleteOrder(order.id) }) { Text("Delete") }
-        }
+        TextButton(onClick = {
+            context.startActivity(
+                Intent.createChooser(OrderShare.shareIntent(order), "Share order")
+            )
+        }) { Text("Share") }
 
         Spacer(modifier = Modifier.height(8.dp))
         SoftCard(modifier = Modifier.fillMaxWidth()) {
@@ -140,7 +143,7 @@ fun OrderDetailScreen(
                 DetailRow("Updated", formatDateTime(order.updatedAt))
                 DetailRow(
                     "Last live check",
-                    order.lastLiveCheckAt?.let { formatDateTime(it) } ?: "Not yet"
+                    order.lastLiveCheckAt?.let { formatDateTime(it) } ?: "Not checked yet — tap Refresh tracking"
                 )
                 if (trackUrl != null && !order.trackingNumber.isNullOrBlank()) {
                     TextButton(

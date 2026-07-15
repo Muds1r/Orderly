@@ -1,86 +1,85 @@
 package com.orderly.app.ui.theme
 
-import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.dynamicDarkColorScheme
-import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 
-/** Status accents — soft muted emerald / blue / amber / coral */
-val StatusDelivered = Color(0xFF059669)
-val StatusInTransit = Color(0xFF2563EB)
+/** Status accents — teal / sky / amber / coral */
+val StatusDelivered = Color(0xFF0D9488)
+val StatusInTransit = Color(0xFF0EA5E9)
 val StatusDelayed = Color(0xFFE11D48)
 val StatusProcessing = Color(0xFFD97706)
 
-private val DeepBlue = Color(0xFF1D4ED8)
-private val SoftIndigo = Color(0xFF4338CA)
-private val LightBg = Color(0xFFF1F5F9)
-private val DarkBg = Color(0xFF0F172A)
-private val LightSurface = Color(0xFFE8EEF5)
-private val DarkSurface = Color(0xFF1E293B)
+private val SkyBlue = Color(0xFF0EA5E9)
+private val Teal = Color(0xFF14B8A6)
+private val Mint = Color(0xFF5EEAD4)
+private val Charcoal = Color(0xFF0F172A)
+private val SoftGray = Color(0xFFF8FAFC)
+private val CardWhite = Color(0xFFFFFFFF)
 
-private val LightFallback = lightColorScheme(
-    primary = DeepBlue,
+private val LightColors = lightColorScheme(
+    primary = SkyBlue,
     onPrimary = Color.White,
-    primaryContainer = Color(0xFFDBE4FF),
-    onPrimaryContainer = Color(0xFF001A41),
-    secondary = SoftIndigo,
+    primaryContainer = Color(0xFFE0F2FE),
+    onPrimaryContainer = Color(0xFF0C4A6E),
+    secondary = Teal,
     onSecondary = Color.White,
-    secondaryContainer = Color(0xFFE0E0FF),
-    onSecondaryContainer = Color(0xFF0E0665),
-    tertiary = Color(0xFF0F766E),
-    background = LightBg,
-    onBackground = Color(0xFF0F172A),
-    surface = LightBg,
-    onSurface = Color(0xFF0F172A),
-    surfaceVariant = Color(0xFFDDE3EA),
-    onSurfaceVariant = Color(0xFF41474D),
-    surfaceContainerLowest = Color.White,
-    surfaceContainerLow = Color(0xFFF5F7FA),
-    surfaceContainer = LightSurface,
-    surfaceContainerHigh = Color(0xFFE2E8F0),
-    surfaceContainerHighest = Color(0xFFD8E0EA),
-    outline = Color(0xFF71787E),
-    outlineVariant = Color(0xFFC1C7CE),
-    error = Color(0xFFBA1A1A),
+    secondaryContainer = Color(0xFFCCFBF1),
+    onSecondaryContainer = Color(0xFF134E4A),
+    tertiary = Mint,
+    onTertiary = Charcoal,
+    tertiaryContainer = Color(0xFFD1FAE5),
+    onTertiaryContainer = Color(0xFF064E3B),
+    background = SoftGray,
+    onBackground = Charcoal,
+    surface = SoftGray,
+    onSurface = Charcoal,
+    surfaceVariant = Color(0xFFE2E8F0),
+    onSurfaceVariant = Color(0xFF475569),
+    surfaceContainerLowest = CardWhite,
+    surfaceContainerLow = CardWhite,
+    surfaceContainer = CardWhite,
+    surfaceContainerHigh = CardWhite,
+    surfaceContainerHighest = Color(0xFFF1F5F9),
+    outline = Color(0xFFCBD5E1),
+    outlineVariant = Color(0xFFE2E8F0),
+    error = Color(0xFFEF4444),
     onError = Color.White
 )
 
-private val DarkFallback = darkColorScheme(
-    primary = Color(0xFFADC6FF),
-    onPrimary = Color(0xFF002E69),
-    primaryContainer = Color(0xFF004493),
-    onPrimaryContainer = Color(0xFFD8E2FF),
-    secondary = Color(0xFFC1C1FF),
-    onSecondary = Color(0xFF1A1576),
-    secondaryContainer = Color(0xFF322E8D),
-    onSecondaryContainer = Color(0xFFE0E0FF),
-    tertiary = Color(0xFF4DDBC8),
-    background = DarkBg,
-    onBackground = Color(0xFFE2E8F0),
-    surface = DarkBg,
-    onSurface = Color(0xFFE2E8F0),
-    surfaceVariant = Color(0xFF41474D),
-    onSurfaceVariant = Color(0xFFC1C7CE),
-    surfaceContainerLowest = Color(0xFF0B1220),
-    surfaceContainerLow = Color(0xFF151C28),
-    surfaceContainer = DarkSurface,
-    surfaceContainerHigh = Color(0xFF283040),
-    surfaceContainerHighest = Color(0xFF333B4B),
-    outline = Color(0xFF8B9198),
-    outlineVariant = Color(0xFF41474D),
-    error = Color(0xFFFFB4AB),
-    onError = Color(0xFF690005)
+private val DarkColors = darkColorScheme(
+    primary = Color(0xFF38BDF8),
+    onPrimary = Color(0xFF0C4A6E),
+    primaryContainer = Color(0xFF0369A1),
+    onPrimaryContainer = Color(0xFFE0F2FE),
+    secondary = Color(0xFF2DD4BF),
+    onSecondary = Color(0xFF134E4A),
+    secondaryContainer = Color(0xFF0F766E),
+    onSecondaryContainer = Color(0xFFCCFBF1),
+    tertiary = Color(0xFF6EE7B7),
+    background = Color(0xFF0B1220),
+    onBackground = Color(0xFFF1F5F9),
+    surface = Color(0xFF0B1220),
+    onSurface = Color(0xFFF1F5F9),
+    surfaceVariant = Color(0xFF1E293B),
+    onSurfaceVariant = Color(0xFF94A3B8),
+    surfaceContainerLowest = Color(0xFF020617),
+    surfaceContainerLow = Color(0xFF111827),
+    surfaceContainer = Color(0xFF1E293B),
+    surfaceContainerHigh = Color(0xFF1E293B),
+    surfaceContainerHighest = Color(0xFF334155),
+    outline = Color(0xFF475569),
+    outlineVariant = Color(0xFF334155),
+    error = Color(0xFFF87171),
+    onError = Color(0xFF450A0A)
 )
 
 private val OrderlyTypography = Typography(
@@ -152,20 +151,10 @@ private val OrderlyTypography = Typography(
 @Composable
 fun OrderlyTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
-    dynamicColor: Boolean = true,
     content: @Composable () -> Unit
 ) {
-    val colorScheme = when {
-        dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
-            val context = LocalContext.current
-            if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-        }
-        darkTheme -> DarkFallback
-        else -> LightFallback
-    }
-
     MaterialTheme(
-        colorScheme = colorScheme,
+        colorScheme = if (darkTheme) DarkColors else LightColors,
         typography = OrderlyTypography,
         content = content
     )

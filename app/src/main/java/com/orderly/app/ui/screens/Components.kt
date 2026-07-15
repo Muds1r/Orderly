@@ -44,7 +44,7 @@ import com.orderly.app.ui.theme.StatusDelivered
 import com.orderly.app.ui.theme.StatusInTransit
 import com.orderly.app.ui.theme.StatusProcessing
 
-private val CardShape = RoundedCornerShape(20.dp)
+private val CardShape = RoundedCornerShape(18.dp)
 
 @Composable
 fun SoftCard(
@@ -70,7 +70,7 @@ fun SoftCard(
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
         ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
         content = content
     )
 }
@@ -82,11 +82,11 @@ fun SoftHeroCard(
 ) {
     Card(
         modifier = modifier,
-        shape = RoundedCornerShape(24.dp),
+        shape = RoundedCornerShape(22.dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.primaryContainer
         ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
         content = content
     )
 }
