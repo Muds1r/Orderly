@@ -321,7 +321,7 @@ interface OrderDao {
         """
         SELECT * FROM tracking_events
         WHERE orderId = :orderId
-        ORDER BY occurredAt DESC
+        ORDER BY occurredAt ASC, id ASC
         """
     )
     fun observeEvents(orderId: String): Flow<List<TrackingEventEntity>>
