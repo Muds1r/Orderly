@@ -5,6 +5,7 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Transaction
+import com.orderly.app.data.tracking.LocationNames
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -84,7 +85,7 @@ interface OrderDao {
         UPDATE orders SET
             carrier = COALESCE(:carrier, carrier),
             shipFrom = COALESCE(:shipFrom, shipFrom),
-            lastLocation = COALESCE(:lastLocation, lastLocation),
+            lastLocation = :lastLocation,
             status = :status,
             updatedAt = :updatedAt
         WHERE id = :id
@@ -107,6 +108,9 @@ interface OrderDao {
 
     @Query("DELETE FROM tracking_events WHERE orderId = :orderId")
     suspend fun deleteEventsForOrder(orderId: String)
+
+    @Query("DELETE FROM tracking_events WHERE orderId = :orderId AND source = 'live'")
+    suspend fun deleteLiveEventsForOrder(orderId: String)
 
     /**
      * Insert a new order or merge into an existing one (same store + order number,
@@ -178,11 +182,12 @@ interface OrderDao {
                 trackingNumber = incoming.trackingNumber ?: existing.trackingNumber,
                 carrier = incoming.carrier ?: existing.carrier,
                 shipFrom = incoming.shipFrom ?: existing.shipFrom,
-                lastLocation = incoming.lastLocation ?: existing.lastLocation,
+                lastLocation = LocationNames.sanitize(incoming.lastLocation)
+                    ?: existing.lastLocation,
                 amount = preferAmount(existing.amount, incoming.amount),
                 currency = incoming.currency ?: existing.currency,
                 paymentStatus = incoming.paymentStatus ?: existing.paymentStatus,
-                productSummary = incoming.productSummary ?: existing.productSummary,
+                productSummary = preferProduct(existing.productSummary, incoming.productSummary),
                 status = OrderStatusMerge.prefer(existing.status, incoming.status),
                 estimatedDelivery = incoming.estimatedDelivery ?: existing.estimatedDelivery,
                 orderDate = minOf(existing.orderDate, incoming.orderDate)
@@ -204,11 +209,11 @@ interface OrderDao {
             val mergedStatus = OrderStatusMerge.prefer(existing.status, incoming.status)
             updateFields(
                 id = existing.id,
-                productSummary = incoming.productSummary,
+                productSummary = preferProduct(existing.productSummary, incoming.productSummary),
                 trackingNumber = incoming.trackingNumber,
                 carrier = incoming.carrier,
                 shipFrom = incoming.shipFrom,
-                lastLocation = incoming.lastLocation,
+                lastLocation = LocationNames.sanitize(incoming.lastLocation),
                 amount = preferAmount(existing.amount, incoming.amount),
                 currency = incoming.currency,
                 paymentStatus = incoming.paymentStatus,
@@ -229,6 +234,23 @@ interface OrderDao {
         else -> maxOf(existing, incoming)
     }
 
+    /** Prefer a real product title over parser junk like "s in this shipment". */
+    private fun preferProduct(existing: String?, incoming: String?): String? {
+        val inc = incoming?.takeIf { !isJunkProduct(it) }
+        val cur = existing?.takeIf { !isJunkProduct(it) }
+        return inc ?: cur
+    }
+
+    private fun isJunkProduct(value: String): Boolean {
+        val s = value.trim().lowercase()
+        if (s.length < 4) return true
+        return "in this shipment" in s ||
+            s == "shipment" ||
+            s == "items" ||
+            s.startsWith("s in this") ||
+            s.startsWith("order #") && s.length < 16
+    }
+
     @Transaction
     suspend fun applyTrackingUpdate(
         orderId: String,
@@ -246,14 +268,21 @@ interface OrderDao {
             forceStatus -> OrderStatusMerge.preferLive(existing.status, status)
             else -> OrderStatusMerge.prefer(existing.status, status)
         }
+        val cleanLocation = LocationNames.sanitize(lastLocation)
+            ?: LocationNames.sanitize(existing.lastLocation)
         updateTrackingSnapshot(
             id = orderId,
             carrier = carrier,
             shipFrom = shipFrom,
-            lastLocation = lastLocation,
+            lastLocation = cleanLocation,
             status = mergedStatus,
             updatedAt = System.currentTimeMillis()
         )
+        // Live courier refresh: replace prior live timeline so the same checkpoints
+        // are not appended again on every sync.
+        if (forceStatus) {
+            deleteLiveEventsForOrder(orderId)
+        }
         appendEvents(orderId, events)
     }
 
@@ -310,6 +339,12 @@ interface OrderDao {
         """
     )
     suspend fun ordersNeedingLiveTrack(limit: Int = 40): List<OrderEntity>
+
+    @Query("UPDATE orders SET productSummary = :summary WHERE id = :id")
+    suspend fun setProductSummary(id: String, summary: String?)
+
+    @Query("UPDATE orders SET lastLocation = :location WHERE id = :id")
+    suspend fun setLastLocation(id: String, location: String?)
 
     @Query("SELECT * FROM orders")
     suspend fun listAllOrders(): List<OrderEntity>

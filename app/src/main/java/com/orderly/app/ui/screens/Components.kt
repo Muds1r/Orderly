@@ -33,6 +33,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.orderly.app.data.db.OrderEntity
 import com.orderly.app.data.db.OrderStatus
+import com.orderly.app.data.tracking.LocationNames
 import com.orderly.app.ui.MainViewModel
 import com.orderly.app.ui.RangePreset
 import com.orderly.app.ui.formatAmount
@@ -43,7 +44,7 @@ import com.orderly.app.ui.theme.StatusDelivered
 import com.orderly.app.ui.theme.StatusInTransit
 import com.orderly.app.ui.theme.StatusProcessing
 
-private val CardShape = RoundedCornerShape(12.dp)
+private val CardShape = RoundedCornerShape(20.dp)
 
 @Composable
 fun SoftCard(
@@ -81,7 +82,7 @@ fun SoftHeroCard(
 ) {
     Card(
         modifier = modifier,
-        shape = CardShape,
+        shape = RoundedCornerShape(24.dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.primaryContainer
         ),
@@ -123,18 +124,18 @@ fun OrderRow(
     SoftCard(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 5.dp),
+            .padding(horizontal = 16.dp, vertical = 6.dp),
         onClick = onClick,
         content = {
             Row(
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+                modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Box(
                     modifier = Modifier
-                        .size(40.dp)
+                        .size(44.dp)
                         .clip(CircleShape)
-                        .background(statusColor(order.status).copy(alpha = 0.12f)),
+                        .background(statusColor(order.status).copy(alpha = 0.14f)),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
@@ -144,27 +145,27 @@ fun OrderRow(
                         color = statusColor(order.status)
                     )
                 }
-                Spacer(modifier = Modifier.width(12.dp))
+                Spacer(modifier = Modifier.width(14.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         order.productSummary ?: order.subject,
-                        style = MaterialTheme.typography.bodyLarge,
+                        style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Medium,
-                        maxLines = 1,
+                        maxLines = 2,
                         overflow = TextOverflow.Ellipsis
                     )
-                    Spacer(modifier = Modifier.height(2.dp))
+                    Spacer(modifier = Modifier.height(4.dp))
                     Text(
                         buildString {
                             append(order.store)
                             append(" · ")
                             append(statusLabel(order.status))
-                            order.lastLocation?.takeIf { it.isNotBlank() }?.let {
+                            LocationNames.sanitize(order.lastLocation)?.let {
                                 append(" · ")
                                 append(it)
                             }
                         },
-                        style = MaterialTheme.typography.bodySmall,
+                        style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
@@ -177,7 +178,7 @@ fun OrderRow(
                 }
                 Text(
                     formatAmount(order.amount, order.currency),
-                    style = MaterialTheme.typography.titleSmall,
+                    style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold
                 )
             }

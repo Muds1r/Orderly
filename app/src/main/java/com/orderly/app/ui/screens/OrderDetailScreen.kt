@@ -27,6 +27,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.orderly.app.data.db.TrackingEventEntity
+import com.orderly.app.data.tracking.LocationNames
 import com.orderly.app.data.tracking.PakCourier
 import com.orderly.app.ui.MainViewModel
 import com.orderly.app.ui.formatAmount
@@ -79,7 +80,7 @@ fun OrderDetailScreen(
                     color = statusColor(order.status),
                     fontWeight = FontWeight.Medium
                 )
-                if (!order.lastLocation.isNullOrBlank()) {
+                if (!LocationNames.sanitize(order.lastLocation).isNullOrBlank()) {
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
                         "Last seen: ${order.lastLocation}",

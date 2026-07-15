@@ -9,6 +9,7 @@ import com.orderly.app.data.db.ProcessedMessageEntity
 import com.orderly.app.data.mail.ImapClient
 import com.orderly.app.data.parser.OrderParser
 import com.orderly.app.data.tracking.LiveTrackingClient
+import com.orderly.app.data.tracking.LocationNames
 import com.orderly.app.data.tracking.PakCourier
 import kotlinx.coroutines.flow.first
 import java.util.concurrent.TimeUnit
@@ -24,7 +25,7 @@ import java.util.concurrent.atomic.AtomicLong
 object SyncEngine {
 
     const val LOOKBACK_DAYS = 365
-    const val SYNC_LOGIC_VERSION = 8
+    const val SYNC_LOGIC_VERSION = 9
     private val OVERLAP_MS = TimeUnit.DAYS.toMillis(1)
     private val generation = AtomicLong(0)
 
@@ -178,6 +179,17 @@ object SyncEngine {
                     dao.deleteOrderById(dup.id)
                 }
             }
+
+        dao.listAllOrders().forEach { order ->
+            val summary = order.productSummary
+            if (summary != null && OrderParser.isJunkProductSummary(summary)) {
+                dao.setProductSummary(order.id, null)
+            }
+            val loc = order.lastLocation
+            if (loc != null && LocationNames.sanitize(loc) == null) {
+                dao.setLastLocation(order.id, null)
+            }
+        }
     }
 
     private suspend fun refreshLiveTracking(

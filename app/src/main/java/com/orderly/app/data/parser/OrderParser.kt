@@ -3,6 +3,7 @@ package com.orderly.app.data.parser
 import com.orderly.app.data.db.OrderEntity
 import com.orderly.app.data.db.OrderStatus
 import com.orderly.app.data.db.TrackingEventDraft
+import com.orderly.app.data.tracking.LocationNames
 import com.orderly.app.data.tracking.PakCourier
 
 /**
@@ -39,8 +40,15 @@ object OrderParser {
     )
 
     private val productRegexes = listOf(
-        Regex("""(?:item|product|bought|ordered)\s*:?\s*(.{5,80}?)(?=\s*\r?\n|\s{2,}|$)""", RegexOption.IGNORE_CASE),
-        Regex(""""([^"]{5,80})"""")
+        // Shopify: "Intense Repair Serum - (5 IN 1) × 2"
+        Regex(
+            """(?m)^([A-Za-z0-9][^\n]{3,90}?)\s*[×xX]\s*\d+\b"""
+        ),
+        // Explicit labels with colon (not "Items in this shipment")
+        Regex(
+            """(?:^|\n)\s*(?:item|product|bought|ordered)\s*:\s*(.{3,80}?)(?=\s*\r?\n|\s{2,}|$)""",
+            RegexOption.IGNORE_CASE
+        )
     )
 
     private val shipFromRegexes = listOf(
@@ -413,10 +421,9 @@ object OrderParser {
         val events = mutableListOf<TrackingEventDraft>()
         for (regex in locationEventRegexes) {
             regex.findAll(text).forEach { match ->
-                val location = match.groupValues[1].trim()
-                    .replace(Regex("""[.,;:]+$"""), "")
-                    .take(60)
-                if (location.length < 3) return@forEach
+                val location = LocationNames.sanitize(
+                    match.groupValues[1].trim().replace(Regex("""[.,;:]+$"""), "").take(60)
+                ) ?: return@forEach
                 val desc = match.value.trim().replace(Regex("""\s+"""), " ").take(160)
                 events += TrackingEventDraft(
                     occurredAt = timestamp,
@@ -535,16 +542,43 @@ object OrderParser {
 
     private fun extractProduct(text: String, subject: String): String? {
         for (regex in productRegexes) {
-            val candidate = regex.find(text)?.groupValues?.get(1)?.trim()
-            if (candidate != null && candidate.length in 5..80 && !candidate.contains('@')) {
-                return candidate.replace(Regex("""\s+"""), " ")
+            regex.findAll(text).forEach { match ->
+                val candidate = match.groupValues[1].trim().replace(Regex("""\s+"""), " ")
+                if (isPlausibleProduct(candidate)) return candidate.take(80)
             }
         }
+        // Gmail shopping card style first line before qty
+        Regex(
+            """(?i)(?:Items in this shipment|Items)\s*\n+([A-Za-z0-9][^\n]{3,80})"""
+        ).find(text)?.groupValues?.get(1)?.trim()?.let {
+            val cleaned = it.replace(Regex("""\s+"""), " ")
+            if (isPlausibleProduct(cleaned)) return cleaned.take(80)
+        }
         val cleaned = subject
-            .replace(Regex("""^(Your|New|Update:)\s+""", RegexOption.IGNORE_CASE), "")
+            .replace(
+                Regex(
+                    """^(Your|New|Update:|A shipment from|Order\s+#?\d+\s*)\s*""",
+                    RegexOption.IGNORE_CASE
+                ),
+                ""
+            )
+            .replace(Regex("""\bis on the way\b.*$""", RegexOption.IGNORE_CASE), "")
             .trim()
-        return cleaned.takeIf { it.length in 5..80 }
+        return cleaned.takeIf { isPlausibleProduct(it) }?.take(80)
     }
+
+    private fun isPlausibleProduct(value: String): Boolean {
+        val s = value.trim()
+        if (s.length !in 3..80 || '@' in s) return false
+        val lower = s.lowercase()
+        if ("in this shipment" in lower) return false
+        if (lower.startsWith("s in this")) return false
+        if (lower in listOf("shipment", "items", "order", "product", "item")) return false
+        if (lower.startsWith("order #") && s.length < 20) return false
+        return true
+    }
+
+    fun isJunkProductSummary(value: String): Boolean = !isPlausibleProduct(value)
 
     private fun detectCurrency(text: String): String? = when {
         Regex("""\b(?:Rs\.?|PKR|₨)\b""", RegexOption.IGNORE_CASE).containsMatchIn(text) -> "PKR"

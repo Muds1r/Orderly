@@ -95,7 +95,7 @@ object LiveTrackingClient {
                 location = location,
                 description = message,
                 source = "live",
-                fingerprint = "postex|$cn|$msgCode|$message|$whenMs".hashFingerprint()
+                fingerprint = "postex|$cn|$msgCode|$message".hashFingerprint()
             )
         }
         if (events.isEmpty()) return null
@@ -103,10 +103,12 @@ object LiveTrackingClient {
         return LiveTrackingResult(
             carrier = PakCourier.POSTEX,
             events = events.sortedByDescending { it.occurredAt },
-            origin = dist.optString("merchantAddress1").ifBlank { null }?.take(80),
+            origin = LocationNames.sanitize(
+                dist.optString("merchantAddress1").ifBlank { null }?.take(80)
+            ),
             destination = null,
             currentStatus = latest?.status,
-            lastLocation = latest?.location
+            lastLocation = LocationNames.sanitize(latest?.location)
         )
     }
 
@@ -167,18 +169,18 @@ object LiveTrackingClient {
                 .replace(Regex("\\s+"), " ")
                 .trim()
             if (plain.isBlank() || plain.contains("not available", ignoreCase = true)) continue
-            val location = Regex(
-                """\b(Karachi|Lahore|Islamabad|Rawalpindi|Multan|Faisalabad|Peshawar|Quetta|Hyderabad|Gujrat|Sialkot|Gujranwala|[A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+)?)\b"""
-            ).find(plain)?.value
+            val location = LocationNames.fromTrackingText(plain)
             val status = statusFromText(plain)
-            val whenMs = parseFlexibleDate(plain) ?: System.currentTimeMillis()
+            val whenMs = parseFlexibleDate(plain) ?: 0L
+            val desc = plain.take(180)
             events += TrackingEventDraft(
-                occurredAt = whenMs,
+                occurredAt = if (whenMs > 0) whenMs else System.currentTimeMillis(),
                 status = status,
                 location = location,
-                description = plain.take(180),
+                description = desc,
                 source = "live",
-                fingerprint = "lcs|$cn|${plain.take(80)}|$whenMs".hashFingerprint()
+                // Stable fingerprint — no wall-clock time (avoids duplicates on every sync)
+                fingerprint = "lcs|$cn|${status.name}|${location.orEmpty()}|${desc.take(80)}".hashFingerprint()
             )
         }
 
@@ -194,7 +196,7 @@ object LiveTrackingClient {
                 events += TrackingEventDraft(
                     occurredAt = System.currentTimeMillis(),
                     status = statusFromText(current),
-                    location = destination ?: origin,
+                    location = LocationNames.sanitize(destination) ?: LocationNames.sanitize(origin),
                     description = current,
                     source = "live",
                     fingerprint = "lcs|$cn|current|$current".hashFingerprint()
@@ -207,10 +209,12 @@ object LiveTrackingClient {
         return LiveTrackingResult(
             carrier = PakCourier.LEOPARDS,
             events = events.sortedByDescending { it.occurredAt },
-            origin = origin,
-            destination = destination,
+            origin = LocationNames.sanitize(origin),
+            destination = LocationNames.sanitize(destination),
             currentStatus = latest?.status,
-            lastLocation = latest?.location ?: destination
+            lastLocation = latest?.location
+                ?: LocationNames.sanitize(destination)
+                ?: LocationNames.sanitize(origin)
         )
     }
 
@@ -252,9 +256,9 @@ object LiveTrackingClient {
         val events = mutableListOf<TrackingEventDraft>()
         for (i in statuses.indices) {
             val statusLabel = statuses[i]
-            val location = locations.getOrNull(i)?.ifBlank { null }
+            val location = LocationNames.sanitize(locations.getOrNull(i)?.ifBlank { null })
             val message = messages.getOrNull(i)?.ifBlank { null }
-            val whenMs = parseFlexibleDate(dates.getOrNull(i)) ?: System.currentTimeMillis()
+            val whenMs = parseFlexibleDate(dates.getOrNull(i)) ?: 0L
             val mapped = statusFromText(statusLabel + " " + (message ?: ""))
             val description = buildString {
                 append(statusLabel)
@@ -264,12 +268,12 @@ object LiveTrackingClient {
                 }
             }
             events += TrackingEventDraft(
-                occurredAt = whenMs,
+                occurredAt = if (whenMs > 0) whenMs else System.currentTimeMillis(),
                 status = mapped,
                 location = location,
                 description = description,
                 source = "live",
-                fingerprint = "mnp|$cn|$statusLabel|$location|$whenMs".hashFingerprint()
+                fingerprint = "mnp|$cn|$statusLabel|${location.orEmpty()}|${description.take(80)}".hashFingerprint()
             )
         }
 
@@ -277,7 +281,7 @@ object LiveTrackingClient {
         return LiveTrackingResult(
             carrier = PakCourier.MNP,
             events = events.sortedByDescending { it.occurredAt },
-            origin = locations.lastOrNull(),
+            origin = LocationNames.sanitize(locations.lastOrNull()),
             destination = null,
             currentStatus = latest?.status,
             lastLocation = latest?.location
@@ -325,7 +329,7 @@ object LiveTrackingClient {
                 val item = infoArr.optJSONObject(i) ?: continue
                 val status = item.optString("status")
                 if (status.isBlank()) continue
-                val station = item.optString("station").ifBlank { null }
+                val station = LocationNames.sanitize(item.optString("station").ifBlank { null })
                 val whenMs = parseFlexibleDate(item.optString("datetime"))
                     ?: System.currentTimeMillis()
                 events += TrackingEventDraft(
@@ -334,7 +338,7 @@ object LiveTrackingClient {
                     location = station,
                     description = if (station != null) "$status — $station" else status,
                     source = "live",
-                    fingerprint = "tcs|$cn|$status|$station|$whenMs".hashFingerprint()
+                    fingerprint = "tcs|$cn|$status|${station.orEmpty()}".hashFingerprint()
                 )
             }
         }
@@ -346,14 +350,14 @@ object LiveTrackingClient {
                 if (status.isBlank()) continue
                 val whenMs = parseFlexibleDate(item.optString("datetime"))
                     ?: System.currentTimeMillis()
-                val loc = item.optString("recievedby").ifBlank { null }
+                val loc = LocationNames.sanitize(item.optString("recievedby").ifBlank { null })
                 events += TrackingEventDraft(
                     occurredAt = whenMs,
                     status = statusFromText(status),
                     location = loc,
                     description = status,
                     source = "live",
-                    fingerprint = "tcs|$cn|cp|$status|$whenMs".hashFingerprint()
+                    fingerprint = "tcs|$cn|cp|$status".hashFingerprint()
                 )
             }
         }
@@ -363,8 +367,8 @@ object LiveTrackingClient {
         return LiveTrackingResult(
             carrier = PakCourier.TCS,
             events = events.sortedByDescending { it.occurredAt },
-            origin = shipment?.optString("origin")?.ifBlank { null },
-            destination = shipment?.optString("destination")?.ifBlank { null },
+            origin = LocationNames.sanitize(shipment?.optString("origin")?.ifBlank { null }),
+            destination = LocationNames.sanitize(shipment?.optString("destination")?.ifBlank { null }),
             currentStatus = events.maxByOrNull { it.occurredAt }?.status,
             lastLocation = events.maxByOrNull { it.occurredAt }?.location
         )

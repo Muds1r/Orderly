@@ -341,6 +341,36 @@ class OrderParserTest {
     }
 
     @Test
+    fun extractsShopifyProductNotShipmentJunk() {
+        val result = OrderParser.parse(
+            messageId = "<divora-ship@shopify>",
+            fromHeader = "Divora <store+1@t.shopifyemail.com>",
+            subject = "A shipment from order #6214 is on the way",
+            body = """
+                Order #6214
+                Your order is on the way.
+                Items in this shipment
+                Intense Repair Serum - (5 IN 1) × 2
+                Buy 1 - 1799
+                BUY 2 (-Rs. 899)
+                Leopards Courier tracking number: CC7527356953
+            """.trimIndent(),
+            timestamp = 1L
+        )
+        assertNotNull(result)
+        assertEquals("Intense Repair Serum - (5 IN 1)", result!!.order.productSummary)
+        assertTrue(!OrderParser.isJunkProductSummary(result.order.productSummary!!))
+    }
+
+    @Test
+    fun rejectsMonthNamesAsLocationJunk() {
+        assertTrue(OrderParser.isJunkProductSummary("s in this shipment"))
+        assertEquals(null, com.orderly.app.data.tracking.LocationNames.sanitize("July"))
+        assertEquals(null, com.orderly.app.data.tracking.LocationNames.sanitize("Jul"))
+        assertEquals("Karachi", com.orderly.app.data.tracking.LocationNames.sanitize("Karachi"))
+    }
+
+    @Test
     fun ignoresFoodpandaPromo() {
         val result = OrderParser.parse(
             messageId = "<fp@foodpanda.pk>",
