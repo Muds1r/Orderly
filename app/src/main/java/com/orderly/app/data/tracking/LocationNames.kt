@@ -29,12 +29,21 @@ object LocationNames {
         return t
     }
 
-    /** City allowlist + Pakistani place pattern; never return a month name. */
+    /** City allowlist + "to/in/at CITY" patterns; never return a month name. */
     fun fromTrackingText(plain: String): String? {
         val known = Regex(
-            """\b(Karachi|Lahore|Islamabad|Rawalpindi|Multan|Faisalabad|Peshawar|Quetta|Hyderabad|Gujrat|Sialkot|Gujranwala|Sukkur|Bahawalpur|Sargodha|Gujranwala|Abbottabad|Mardan|Mingora|Sheikhupura)\b""",
+            """\b(Karachi|Lahore|Islamabad|Rawalpindi|Multan|Faisalabad|Peshawar|Quetta|Hyderabad|Gujrat|Sialkot|Gujranwala|Sukkur|Bahawalpur|Sargodha|Abbottabad|Mardan|Mingora|Sheikhupura|Chicha\s+Watni)\b""",
             RegexOption.IGNORE_CASE
         ).find(plain)?.value
-        return sanitize(known)
+        sanitize(known)?.let { return it }
+
+        // "Dispatched to ISLAMABAD" / "Shipment picked in CHICHA WATNI"
+        val patterned = Regex(
+            """\b(?:to|in|at|from)\s+([A-Za-z][A-Za-z]+(?:\s+[A-Za-z][A-Za-z]+){0,3})\b""",
+            RegexOption.IGNORE_CASE
+        ).find(plain)?.groupValues?.get(1)?.trim()
+        return sanitize(patterned)?.split(" ")?.joinToString(" ") { part ->
+            part.lowercase().replaceFirstChar { c -> c.uppercaseChar() }
+        }
     }
 }

@@ -12,74 +12,76 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 
-/** Status accents — teal / sky / amber / coral */
-val StatusDelivered = Color(0xFF0D9488)
-val StatusInTransit = Color(0xFF0EA5E9)
-val StatusDelayed = Color(0xFFE11D48)
-val StatusProcessing = Color(0xFFD97706)
+/** Simple status accents — not part of the brand palette. */
+val StatusDelivered = Color(0xFF166534)
+val StatusInTransit = Color(0xFF1D4ED8)
+val StatusDelayed = Color(0xFFB91C1C)
+val StatusProcessing = Color(0xFFA16207)
 
-private val SkyBlue = Color(0xFF0EA5E9)
-private val Teal = Color(0xFF14B8A6)
-private val Mint = Color(0xFF5EEAD4)
-private val Charcoal = Color(0xFF0F172A)
-private val SoftGray = Color(0xFFF8FAFC)
-private val CardWhite = Color(0xFFFFFFFF)
+private val Black = Color(0xFF000000)
+private val White = Color(0xFFFFFFFF)
+private val NearBlack = Color(0xFF111111)
+private val SoftGray = Color(0xFFF5F5F5)
+private val MidGray = Color(0xFF6B6B6B)
+private val LineGray = Color(0xFFE5E5E5)
 
+/** Standard white + black Material scheme — no brand tint. */
 private val LightColors = lightColorScheme(
-    primary = SkyBlue,
-    onPrimary = Color.White,
-    primaryContainer = Color(0xFFE0F2FE),
-    onPrimaryContainer = Color(0xFF0C4A6E),
-    secondary = Teal,
-    onSecondary = Color.White,
-    secondaryContainer = Color(0xFFCCFBF1),
-    onSecondaryContainer = Color(0xFF134E4A),
-    tertiary = Mint,
-    onTertiary = Charcoal,
-    tertiaryContainer = Color(0xFFD1FAE5),
-    onTertiaryContainer = Color(0xFF064E3B),
-    background = SoftGray,
-    onBackground = Charcoal,
-    surface = SoftGray,
-    onSurface = Charcoal,
-    surfaceVariant = Color(0xFFE2E8F0),
-    onSurfaceVariant = Color(0xFF475569),
-    surfaceContainerLowest = CardWhite,
-    surfaceContainerLow = CardWhite,
-    surfaceContainer = CardWhite,
-    surfaceContainerHigh = CardWhite,
-    surfaceContainerHighest = Color(0xFFF1F5F9),
-    outline = Color(0xFFCBD5E1),
-    outlineVariant = Color(0xFFE2E8F0),
-    error = Color(0xFFEF4444),
-    onError = Color.White
+    primary = Black,
+    onPrimary = White,
+    primaryContainer = SoftGray,
+    onPrimaryContainer = NearBlack,
+    secondary = NearBlack,
+    onSecondary = White,
+    secondaryContainer = SoftGray,
+    onSecondaryContainer = NearBlack,
+    tertiary = MidGray,
+    onTertiary = White,
+    tertiaryContainer = SoftGray,
+    onTertiaryContainer = NearBlack,
+    background = White,
+    onBackground = NearBlack,
+    surface = White,
+    onSurface = NearBlack,
+    surfaceVariant = SoftGray,
+    onSurfaceVariant = MidGray,
+    surfaceContainerLowest = White,
+    surfaceContainerLow = White,
+    surfaceContainer = White,
+    surfaceContainerHigh = White,
+    surfaceContainerHighest = SoftGray,
+    outline = LineGray,
+    outlineVariant = LineGray,
+    error = Color(0xFFB91C1C),
+    onError = White
 )
 
 private val DarkColors = darkColorScheme(
-    primary = Color(0xFF38BDF8),
-    onPrimary = Color(0xFF0C4A6E),
-    primaryContainer = Color(0xFF0369A1),
-    onPrimaryContainer = Color(0xFFE0F2FE),
-    secondary = Color(0xFF2DD4BF),
-    onSecondary = Color(0xFF134E4A),
-    secondaryContainer = Color(0xFF0F766E),
-    onSecondaryContainer = Color(0xFFCCFBF1),
-    tertiary = Color(0xFF6EE7B7),
-    background = Color(0xFF0B1220),
-    onBackground = Color(0xFFF1F5F9),
-    surface = Color(0xFF0B1220),
-    onSurface = Color(0xFFF1F5F9),
-    surfaceVariant = Color(0xFF1E293B),
-    onSurfaceVariant = Color(0xFF94A3B8),
-    surfaceContainerLowest = Color(0xFF020617),
-    surfaceContainerLow = Color(0xFF111827),
-    surfaceContainer = Color(0xFF1E293B),
-    surfaceContainerHigh = Color(0xFF1E293B),
-    surfaceContainerHighest = Color(0xFF334155),
-    outline = Color(0xFF475569),
-    outlineVariant = Color(0xFF334155),
+    primary = White,
+    onPrimary = Black,
+    primaryContainer = Color(0xFF1A1A1A),
+    onPrimaryContainer = White,
+    secondary = Color(0xFFE5E5E5),
+    onSecondary = Black,
+    secondaryContainer = Color(0xFF1A1A1A),
+    onSecondaryContainer = White,
+    tertiary = Color(0xFFA3A3A3),
+    onTertiary = Black,
+    background = Black,
+    onBackground = White,
+    surface = Black,
+    onSurface = White,
+    surfaceVariant = Color(0xFF1A1A1A),
+    onSurfaceVariant = Color(0xFFA3A3A3),
+    surfaceContainerLowest = Black,
+    surfaceContainerLow = Color(0xFF0A0A0A),
+    surfaceContainer = Color(0xFF141414),
+    surfaceContainerHigh = Color(0xFF1A1A1A),
+    surfaceContainerHighest = Color(0xFF262626),
+    outline = Color(0xFF333333),
+    outlineVariant = Color(0xFF262626),
     error = Color(0xFFF87171),
-    onError = Color(0xFF450A0A)
+    onError = Black
 )
 
 private val OrderlyTypography = Typography(

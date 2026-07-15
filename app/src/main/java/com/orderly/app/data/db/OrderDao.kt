@@ -294,7 +294,8 @@ interface OrderDao {
         val out = mutableListOf<TrackingEventDraft>()
         for (e in events.sortedBy { it.occurredAt }) {
             val day = e.occurredAt / 86_400_000L
-            val key = "${'$'}{e.status}|${'$'}{e.location?.lowercase().orEmpty()}|${'$'}day|${'$'}{e.description.take(48).lowercase()}"
+            val key =
+                "${e.status}|${e.location?.lowercase().orEmpty()}|$day|${e.description.take(48).lowercase()}"
             if (seen.add(key)) out += e
         }
         return out

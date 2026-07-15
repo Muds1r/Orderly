@@ -158,35 +158,34 @@ object LiveTrackingClient {
             ).find(html)?.groupValues?.get(1)?.trim()
 
         val events = mutableListOf<TrackingEventDraft>()
-        val itemPattern = Pattern.compile(
-            """<div class="tracking-item">(.*?)</div>\s*</div>""",
+        // Prefer date + content pairs (matches Leopards' tracking-date / tracking-content markup).
+        val pairPattern = Pattern.compile(
+            """class="tracking-date"[^>]*>(.*?)</div>\s*<div class="tracking-content"[^>]*>(.*?)</div>""",
             Pattern.DOTALL or Pattern.CASE_INSENSITIVE
         )
-        val matcher = itemPattern.matcher(html)
-        while (matcher.find()) {
-            val block = matcher.group(1) ?: continue
-            val plain = block.replace(Regex("<[^>]+>"), " ")
-                .replace(Regex("\\s+"), " ")
-                .trim()
-            if (plain.isBlank() || plain.contains("not available", ignoreCase = true)) continue
-            val location = LocationNames.fromTrackingText(plain)
-            val status = statusFromText(plain)
-            val whenMs = parseFlexibleDate(plain) ?: 0L
-            val desc = cleanLiveDescription(plain, location)
-            // Prefer real checkpoint time; never stamp all events with "now" (that breaks sort).
-            val occurredAt = when {
-                whenMs > 0L -> whenMs
-                else -> 0L
+        val pairMatcher = pairPattern.matcher(html)
+        var matchedPairs = false
+        while (pairMatcher.find()) {
+            matchedPairs = true
+            val datePlain = stripHtml(pairMatcher.group(1) ?: "")
+            val contentPlain = stripHtml(pairMatcher.group(2) ?: "")
+            if (contentPlain.isBlank() || contentPlain.contains("not available", ignoreCase = true)) {
+                continue
             }
-            if (occurredAt == 0L && desc.isBlank()) continue
-            events += TrackingEventDraft(
-                occurredAt = occurredAt,
-                status = status,
-                location = location,
-                description = desc.ifBlank { plain.take(120) },
-                source = "live",
-                fingerprint = "lcs|$cn|${status.name}|${location.orEmpty()}|${desc.take(80).ifBlank { plain.take(80) }}".hashFingerprint()
+            val plain = "$datePlain $contentPlain".trim()
+            events += leopardsEventDraft(cn, plain, contentPlain, datePlain)
+        }
+        if (!matchedPairs) {
+            val itemPattern = Pattern.compile(
+                """<div class="tracking-item">(.*?)</div>\s*</div>""",
+                Pattern.DOTALL or Pattern.CASE_INSENSITIVE
             )
+            val matcher = itemPattern.matcher(html)
+            while (matcher.find()) {
+                val plain = stripHtml(matcher.group(1) ?: "")
+                if (plain.isBlank() || plain.contains("not available", ignoreCase = true)) continue
+                events += leopardsEventDraft(cn, plain, plain, plain)
+            }
         }
 
         // If some dates failed to parse, order by scraped sequence then known times.
@@ -521,7 +520,36 @@ object LiveTrackingClient {
             .replace(Regex("""\s+"""), " ")
             .trim()
 
-    /** Drop embedded date from courier status lines; prefer short status · city. */
+    private fun stripHtml(raw: String): String =
+        raw.replace(Regex("<[^>]+>"), " ")
+            .replace(Regex("""\s+"""), " ")
+            .trim()
+
+    private fun leopardsEventDraft(
+        cn: String,
+        plain: String,
+        contentPlain: String,
+        datePlain: String
+    ): TrackingEventDraft {
+        val location = LocationNames.fromTrackingText(contentPlain)
+            ?: LocationNames.fromTrackingText(plain)
+        val status = statusFromText(contentPlain.ifBlank { plain })
+        val whenMs = parseFlexibleDate(datePlain) ?: parseFlexibleDate(plain) ?: 0L
+        val desc = cleanLiveDescription(contentPlain.ifBlank { plain }, location)
+        return TrackingEventDraft(
+            occurredAt = whenMs,
+            status = status,
+            location = location,
+            description = desc.ifBlank { contentPlain.take(120).ifBlank { plain.take(120) } },
+            source = "live",
+            fingerprint = "lcs|$cn|${status.name}|${location.orEmpty()}|${desc.take(80).ifBlank { plain.take(80) }}".hashFingerprint()
+        )
+    }
+
+    /**
+     * Keep courier wording when possible (e.g. "Dispatched to ISLAMABAD"),
+     * otherwise fall back to a short status · city label.
+     */
     private fun cleanLiveDescription(plain: String, location: String? = null): String {
         val withoutDate = plain.replace(
             Regex(
@@ -530,6 +558,16 @@ object LiveTrackingClient {
             ),
             ""
         ).replace(Regex("""\s+"""), " ").trim()
+
+        // Prefer the courier's own line when it already reads like a status update.
+        if (withoutDate.length in 6..140 &&
+            Regex(
+                """\b(dispatched|picked|arrived|delivered|out for delivery|booked|transit|shipment)\b""",
+                RegexOption.IGNORE_CASE
+            ).containsMatchIn(withoutDate)
+        ) {
+            return withoutDate.replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.US) else it.toString() }
+        }
 
         val status = statusFromText(withoutDate)
         val short = when (status) {
@@ -605,4 +643,8 @@ object LiveTrackingClient {
 
     /** Exposed for unit tests. */
     fun parseDateForTest(raw: String): Long? = parseFlexibleDate(raw)
+
+    /** Exposed for unit tests. */
+    fun parseLeopardsHtmlForTest(html: String, cn: String = "TEST"): LiveTrackingResult? =
+        parseLeopardsHtml(html, cn)
 }
