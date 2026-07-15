@@ -4,6 +4,7 @@ import android.content.Context
 import com.orderly.app.data.SettingsStore
 import com.orderly.app.data.db.AppDatabase
 import com.orderly.app.data.db.OrderEntity
+import com.orderly.app.data.db.OrderStatus
 import com.orderly.app.data.db.OrderStatusMerge
 import com.orderly.app.data.db.ProcessedMessageEntity
 import com.orderly.app.data.mail.ImapClient
@@ -11,21 +12,15 @@ import com.orderly.app.data.parser.OrderParser
 import com.orderly.app.data.tracking.LiveTrackingClient
 import com.orderly.app.data.tracking.LocationNames
 import com.orderly.app.data.tracking.PakCourier
+import com.orderly.app.notify.StatusNotifier
 import kotlinx.coroutines.flow.first
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 
-/**
- * Shared sync logic for manual sync and the background worker.
- *
- * 1) Pull store + courier emails from Gmail (IMAP read-only)
- * 2) Upsert orders / append email timeline events
- * 3) Live-refresh in-transit packages via PostEx / Leopards / TCS public track
- */
 object SyncEngine {
 
     const val LOOKBACK_DAYS = 365
-    const val SYNC_LOGIC_VERSION = 10
+    const val SYNC_LOGIC_VERSION = 11
     private val OVERLAP_MS = TimeUnit.DAYS.toMillis(1)
     private val generation = AtomicLong(0)
 
@@ -44,9 +39,6 @@ object SyncEngine {
         else maxOf(full, last - OVERLAP_MS)
     }
 
-    /**
-     * @return number of emails parsed this run, or null if not signed in.
-     */
     suspend fun sync(context: Context, forceFull: Boolean = false): Int? {
         val gen = generation.get()
         val settings = SettingsStore(context)
@@ -55,7 +47,6 @@ object SyncEngine {
         val dao = AppDatabase.get(context).orderDao()
 
         val marker = settings.syncMarker.first()
-        // New parser rules: re-read already-seen emails so amounts/status/duplicates fix.
         if (marker != SYNC_LOGIC_VERSION) {
             dao.deleteAllProcessed()
         }
@@ -76,14 +67,10 @@ object SyncEngine {
             if (result.trackingOnly) {
                 val tracking = result.order.trackingNumber ?: return@forEach
                 val existing = dao.getByTrackingNumber(tracking)
-                if (existing != null) {
-                    dao.applyTrackingUpdate(
-                        orderId = existing.id,
-                        carrier = result.order.carrier,
-                        shipFrom = result.order.shipFrom,
-                        lastLocation = result.order.lastLocation,
-                        status = result.order.status,
-                        events = result.events
+                if (existing != null && existing.deletedAt == null) {
+                    applyLiveOrEmailUpdate(
+                        context, dao, existing, result.order.carrier, result.order.shipFrom,
+                        result.order.lastLocation, result.order.status, result.events, forceStatus = false
                     )
                     dao.insertProcessed(
                         ProcessedMessageEntity(
@@ -93,8 +80,6 @@ object SyncEngine {
                         )
                     )
                 }
-                // No matching store order yet — skip placeholder so insights stay clean.
-                // Store email with the same CN will create the order; later courier mail merges.
             } else {
                 dao.upsertOrder(result.order, result.messageId, result.events)
             }
@@ -104,7 +89,7 @@ object SyncEngine {
             throw SyncCancelledException()
         }
 
-        refreshLiveTracking(dao, gen, settings, email)
+        refreshLiveTracking(context, dao, gen, settings, email)
 
         if (generation.get() != gen || settings.accountName.first() != email) {
             throw SyncCancelledException()
@@ -112,22 +97,81 @@ object SyncEngine {
 
         cleanupFoulAndDuplicateOrders(dao)
 
-        if (generation.get() != gen || settings.accountName.first() != email) {
-            throw SyncCancelledException()
-        }
-
         settings.setLastSync(System.currentTimeMillis())
         settings.setSyncMarker(SYNC_LOGIC_VERSION)
         return results.size
     }
 
     /**
-     * Drop phone-number "tracking" junk and merge same store+order # rows
-     * left over from older parsers.
+     * Live-only refresh for one order (no Gmail). Returns true if courier data applied.
      */
+    suspend fun refreshTrackingForOrder(context: Context, orderId: String): Boolean {
+        val dao = AppDatabase.get(context).orderDao()
+        val order = dao.getById(orderId) ?: return false
+        val tracking = order.trackingNumber ?: return false
+        val hint = PakCourier.detect(tracking, order.carrier)
+        val live = runCatching { LiveTrackingClient.track(tracking, hint) }.getOrNull()
+        dao.setLastLiveCheckAt(orderId, System.currentTimeMillis())
+        if (live == null) return false
+        applyLiveOrEmailUpdate(
+            context, dao, order,
+            live.carrier.displayName, live.origin,
+            live.lastLocation ?: live.destination,
+            live.currentStatus, live.events, forceStatus = true
+        )
+        return true
+    }
+
+    /** Live-only batch refresh (no IMAP). */
+    suspend fun refreshLiveTrackingOnly(context: Context): Int {
+        val settings = SettingsStore(context)
+        val email = settings.accountName.first() ?: return 0
+        val dao = AppDatabase.get(context).orderDao()
+        val gen = generation.get()
+        return refreshLiveTracking(context, dao, gen, settings, email)
+    }
+
+    private suspend fun applyLiveOrEmailUpdate(
+        context: Context,
+        dao: com.orderly.app.data.db.OrderDao,
+        existing: OrderEntity,
+        carrier: String?,
+        shipFrom: String?,
+        lastLocation: String?,
+        status: OrderStatus?,
+        events: List<com.orderly.app.data.db.TrackingEventDraft>,
+        forceStatus: Boolean
+    ) {
+        val previous = existing.status
+        dao.applyTrackingUpdate(
+            orderId = existing.id,
+            carrier = carrier,
+            shipFrom = shipFrom,
+            lastLocation = lastLocation,
+            status = status,
+            events = events,
+            forceStatus = forceStatus
+        )
+        val next = status?.let {
+            if (forceStatus) OrderStatusMerge.preferLive(previous, it)
+            else OrderStatusMerge.prefer(previous, it)
+        } ?: previous
+        if (next != previous) {
+            StatusNotifier.notifyIfChanged(
+                context,
+                existing.copy(
+                    status = next,
+                    lastLocation = LocationNames.sanitize(lastLocation) ?: existing.lastLocation,
+                    carrier = carrier ?: existing.carrier
+                ),
+                previous,
+                next
+            )
+        }
+    }
+
     private suspend fun cleanupFoulAndDuplicateOrders(dao: com.orderly.app.data.db.OrderDao) {
         val all = dao.listAllOrders()
-        // Phone / hotline mistaken as CN (e.g. Saeed Ghani WhatsApp 021…)
         all.filter { order ->
             val cn = order.trackingNumber
             !cn.isNullOrBlank() && OrderParser.isPhoneLike(cn) &&
@@ -139,7 +183,7 @@ object SyncEngine {
 
         val remaining = dao.listAllOrders()
         remaining
-            .filter { order -> !order.orderNumber.isNullOrBlank() }
+            .filter { order -> !order.orderNumber.isNullOrBlank() && order.deletedAt == null }
             .groupBy { order -> order.store.lowercase() to order.orderNumber!! }
             .values
             .filter { group -> group.size > 1 }
@@ -193,11 +237,13 @@ object SyncEngine {
     }
 
     private suspend fun refreshLiveTracking(
+        context: Context,
         dao: com.orderly.app.data.db.OrderDao,
         gen: Long,
         settings: SettingsStore,
         email: String
-    ) {
+    ): Int {
+        var updated = 0
         val candidates = dao.ordersNeedingLiveTrack(40)
         for (order in candidates) {
             if (generation.get() != gen || settings.accountName.first() != email) {
@@ -206,19 +252,17 @@ object SyncEngine {
             val tracking = order.trackingNumber ?: continue
             val hint = PakCourier.detect(tracking, order.carrier)
             val live = runCatching { LiveTrackingClient.track(tracking, hint) }.getOrNull()
-                ?: continue
-
-            // Live courier status is authoritative (fixes false "Delivered" from email wording).
-            dao.applyTrackingUpdate(
-                orderId = order.id,
-                carrier = live.carrier.displayName,
-                shipFrom = live.origin,
-                lastLocation = live.lastLocation ?: live.destination,
-                status = live.currentStatus,
-                events = live.events,
-                forceStatus = true
+            dao.setLastLiveCheckAt(order.id, System.currentTimeMillis())
+            if (live == null) continue
+            applyLiveOrEmailUpdate(
+                context, dao, order,
+                live.carrier.displayName, live.origin,
+                live.lastLocation ?: live.destination,
+                live.currentStatus, live.events, forceStatus = true
             )
+            updated++
         }
+        return updated
     }
 }
 

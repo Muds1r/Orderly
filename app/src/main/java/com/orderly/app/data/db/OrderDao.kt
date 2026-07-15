@@ -234,11 +234,11 @@ interface OrderDao {
         else -> maxOf(existing, incoming)
     }
 
-    /** Prefer a real product title over parser junk like "s in this shipment". */
+    /** Keep a good product title forever — ship mail must not overwrite confirmation. */
     private fun preferProduct(existing: String?, incoming: String?): String? {
-        val inc = incoming?.takeIf { !isJunkProduct(it) }
         val cur = existing?.takeIf { !isJunkProduct(it) }
-        return inc ?: cur
+        val inc = incoming?.takeIf { !isJunkProduct(it) }
+        return cur ?: inc
     }
 
     private fun isJunkProduct(value: String): Boolean {
@@ -270,20 +270,34 @@ interface OrderDao {
         }
         val cleanLocation = LocationNames.sanitize(lastLocation)
             ?: LocationNames.sanitize(existing.lastLocation)
+        val now = System.currentTimeMillis()
         updateTrackingSnapshot(
             id = orderId,
             carrier = carrier,
             shipFrom = shipFrom,
             lastLocation = cleanLocation,
             status = mergedStatus,
-            updatedAt = System.currentTimeMillis()
+            updatedAt = now
         )
-        // Live courier refresh: replace prior live timeline so the same checkpoints
-        // are not appended again on every sync.
         if (forceStatus) {
+            setLastLiveCheckAt(orderId, now)
             deleteLiveEventsForOrder(orderId)
+            appendEvents(orderId, dedupeTimelineDrafts(events))
+        } else {
+            appendEvents(orderId, events)
         }
-        appendEvents(orderId, events)
+    }
+
+    /** Collapse same status+location+day drafts before insert. */
+    private fun dedupeTimelineDrafts(events: List<TrackingEventDraft>): List<TrackingEventDraft> {
+        val seen = linkedSetOf<String>()
+        val out = mutableListOf<TrackingEventDraft>()
+        for (e in events.sortedBy { it.occurredAt }) {
+            val day = e.occurredAt / 86_400_000L
+            val key = "${'$'}{e.status}|${'$'}{e.location?.lowercase().orEmpty()}|${'$'}day|${'$'}{e.description.take(48).lowercase()}"
+            if (seen.add(key)) out += e
+        }
+        return out
     }
 
     suspend fun appendEvents(orderId: String, events: List<TrackingEventDraft>) {
@@ -311,7 +325,7 @@ interface OrderDao {
         }
     }
 
-    @Query("SELECT * FROM orders ORDER BY orderDate DESC")
+    @Query("SELECT * FROM orders WHERE deletedAt IS NULL AND hidden = 0 ORDER BY orderDate DESC")
     fun allOrders(): Flow<List<OrderEntity>>
 
     @Query("SELECT * FROM orders WHERE id = :id")
@@ -329,12 +343,14 @@ interface OrderDao {
     @Query(
         """
         SELECT * FROM orders
-        WHERE trackingNumber IS NOT NULL
+        WHERE deletedAt IS NULL AND hidden = 0
+          AND trackingNumber IS NOT NULL
           AND trackingNumber != ''
           AND status NOT IN ('CANCELLED', 'RETURNED')
         ORDER BY
+          CASE WHEN watched = 1 THEN 0 ELSE 1 END,
           CASE WHEN status = 'DELIVERED' THEN 1 ELSE 0 END,
-          updatedAt ASC
+          CASE WHEN lastLiveCheckAt IS NULL THEN 0 ELSE lastLiveCheckAt END ASC
         LIMIT :limit
         """
     )
@@ -361,8 +377,11 @@ interface OrderDao {
     @Query(
         """
         SELECT * FROM orders
-        WHERE status NOT IN ('DELIVERED', 'CANCELLED', 'RETURNED')
-        ORDER BY orderDate DESC
+        WHERE deletedAt IS NULL AND hidden = 0
+          AND status NOT IN ('DELIVERED', 'CANCELLED', 'RETURNED')
+        ORDER BY
+          CASE WHEN watched = 1 THEN 0 ELSE 1 END,
+          orderDate DESC
         """
     )
     fun activeOrders(): Flow<List<OrderEntity>>
@@ -370,8 +389,11 @@ interface OrderDao {
     @Query(
         """
         SELECT * FROM orders
-        WHERE status IN ('SHIPPED', 'IN_TRANSIT', 'OUT_FOR_DELIVERY', 'DELAYED')
-        ORDER BY orderDate DESC
+        WHERE deletedAt IS NULL AND hidden = 0
+          AND status IN ('SHIPPED', 'IN_TRANSIT', 'OUT_FOR_DELIVERY', 'DELAYED')
+        ORDER BY
+          CASE WHEN watched = 1 THEN 0 ELSE 1 END,
+          orderDate DESC
         """
     )
     fun inTransitOrders(): Flow<List<OrderEntity>>
@@ -379,7 +401,8 @@ interface OrderDao {
     @Query(
         """
         SELECT * FROM orders
-        WHERE status = 'DELAYED'
+        WHERE deletedAt IS NULL AND hidden = 0
+          AND status = 'DELAYED'
         ORDER BY orderDate DESC
         """
     )
@@ -388,7 +411,8 @@ interface OrderDao {
     @Query(
         """
         SELECT * FROM orders
-        WHERE status = 'DELIVERED'
+        WHERE deletedAt IS NULL AND hidden = 0
+          AND status = 'DELIVERED'
         ORDER BY updatedAt DESC
         LIMIT :limit
         """
@@ -398,7 +422,8 @@ interface OrderDao {
     @Query(
         """
         SELECT * FROM orders
-        WHERE (:query = '' OR
+        WHERE deletedAt IS NULL AND hidden = 0
+          AND (:query = '' OR
                store LIKE '%' || :query || '%' OR
                IFNULL(orderNumber, '') LIKE '%' || :query || '%' OR
                IFNULL(productSummary, '') LIKE '%' || :query || '%' OR
@@ -416,7 +441,9 @@ interface OrderDao {
                SUM(IFNULL(amount, 0)) AS totalSpent,
                COUNT(*) AS orderCount
         FROM orders
-        WHERE orderDate BETWEEN :start AND :end
+        WHERE deletedAt IS NULL AND hidden = 0
+          AND orderDate BETWEEN :start AND :end
+          AND IFNULL(amount, 0) > 0
         GROUP BY store
         ORDER BY totalSpent DESC
         """
@@ -426,7 +453,9 @@ interface OrderDao {
     @Query(
         """
         SELECT SUM(IFNULL(amount, 0)) FROM orders
-        WHERE orderDate BETWEEN :start AND :end
+        WHERE deletedAt IS NULL AND hidden = 0
+          AND orderDate BETWEEN :start AND :end
+          AND IFNULL(amount, 0) > 0
         """
     )
     fun totalSpent(start: Long, end: Long): Flow<Double?>
@@ -434,13 +463,48 @@ interface OrderDao {
     @Query(
         """
         SELECT COUNT(*) FROM orders
-        WHERE orderDate BETWEEN :start AND :end
+        WHERE deletedAt IS NULL AND hidden = 0
+          AND orderDate BETWEEN :start AND :end
+          AND IFNULL(amount, 0) > 0
         """
     )
     fun orderCount(start: Long, end: Long): Flow<Int>
 
-    @Query("SELECT COUNT(*) FROM orders")
+    @Query("SELECT COUNT(*) FROM orders WHERE deletedAt IS NULL AND hidden = 0")
     fun totalOrderCount(): Flow<Int>
+
+    @Query("UPDATE orders SET hidden = :hidden WHERE id = :id")
+    suspend fun setHidden(id: String, hidden: Boolean)
+
+    @Query("UPDATE orders SET watched = :watched WHERE id = :id")
+    suspend fun setWatched(id: String, watched: Boolean)
+
+    @Query("UPDATE orders SET deletedAt = :deletedAt WHERE id = :id")
+    suspend fun setDeletedAt(id: String, deletedAt: Long?)
+
+    @Query("UPDATE orders SET lastLiveCheckAt = :at, updatedAt = :at WHERE id = :id")
+    suspend fun setLastLiveCheckAt(id: String, at: Long)
+
+    @Query(
+        """
+        SELECT * FROM orders
+        WHERE deletedAt IS NULL AND hidden = 1
+        ORDER BY orderDate DESC
+        """
+    )
+    fun hiddenOrders(): Flow<List<OrderEntity>>
+
+    @Query(
+        """
+        SELECT * FROM orders
+        WHERE deletedAt IS NULL AND watched = 1
+        ORDER BY orderDate DESC
+        """
+    )
+    fun watchedOrders(): Flow<List<OrderEntity>>
+
+    @Query("SELECT * FROM orders WHERE deletedAt IS NULL ORDER BY orderDate DESC")
+    suspend fun listVisibleOrders(): List<OrderEntity>
 
     @Query("DELETE FROM orders")
     suspend fun deleteAllOrders()

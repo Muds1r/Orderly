@@ -4,11 +4,13 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.work.WorkInfo
+import com.orderly.app.data.OrderShare
 import com.orderly.app.data.SettingsStore
 import com.orderly.app.data.db.AppDatabase
 import com.orderly.app.data.db.OrderEntity
 import com.orderly.app.data.db.StoreSummary
 import com.orderly.app.data.mail.ImapClient
+import com.orderly.app.notify.StatusNotifier
 import com.orderly.app.sync.SyncEngine
 import com.orderly.app.sync.SyncScheduler
 import com.orderly.app.sync.SyncWorker
@@ -37,6 +39,13 @@ sealed interface SyncState {
     data class Error(val message: String) : SyncState
 }
 
+sealed interface TrackingRefreshState {
+    data object Idle : TrackingRefreshState
+    data object Loading : TrackingRefreshState
+    data class Ok(val at: Long) : TrackingRefreshState
+    data class Fail(val message: String) : TrackingRefreshState
+}
+
 @OptIn(ExperimentalCoroutinesApi::class)
 class MainViewModel(app: Application) : AndroidViewModel(app) {
 
@@ -58,7 +67,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _syncState = MutableStateFlow<SyncState>(SyncState.Idle)
     val syncState: StateFlow<SyncState> = _syncState
 
+    private val _trackingRefresh = MutableStateFlow<TrackingRefreshState>(TrackingRefreshState.Idle)
+    val trackingRefresh: StateFlow<TrackingRefreshState> = _trackingRefresh
+
     init {
+        StatusNotifier.ensureChannel(app)
         viewModelScope.launch {
             SyncScheduler.manualSyncFlow(getApplication()).collect { infos ->
                 val info = infos.firstOrNull() ?: return@collect
@@ -112,6 +125,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val recentlyDelivered: StateFlow<List<OrderEntity>> = dao.recentlyDelivered(8)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    val watchedOrders: StateFlow<List<OrderEntity>> = dao.watchedOrders()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     val searchedOrders: StateFlow<List<OrderEntity>> = _searchQuery
         .flatMapLatest { dao.searchOrders(it.trim()) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -146,6 +162,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         allOrders.value.find { it.id == id }
             ?: activeOrders.value.find { it.id == id }
             ?: searchedOrders.value.find { it.id == id }
+            ?: watchedOrders.value.find { it.id == id }
 
     fun setRange(preset: RangePreset) {
         _range.value = preset
@@ -176,7 +193,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             dao.deleteAllEvents()
             dao.deleteAllOrders()
             dao.deleteAllProcessed()
-            // Clear again in case a late sync write raced the first wipe.
             dao.deleteAllEvents()
             dao.deleteAllOrders()
             dao.deleteAllProcessed()
@@ -188,4 +204,45 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (_syncState.value is SyncState.Syncing) return
         SyncScheduler.enqueueManual(getApplication(), forceFull = false)
     }
+
+    fun refreshTracking(orderId: String) {
+        if (_trackingRefresh.value is TrackingRefreshState.Loading) return
+        viewModelScope.launch {
+            _trackingRefresh.value = TrackingRefreshState.Loading
+            val ok = runCatching {
+                SyncEngine.refreshTrackingForOrder(getApplication(), orderId)
+            }.getOrElse {
+                _trackingRefresh.value = TrackingRefreshState.Fail(it.message ?: "Refresh failed")
+                return@launch
+            }
+            _trackingRefresh.value = if (ok) {
+                TrackingRefreshState.Ok(System.currentTimeMillis())
+            } else {
+                TrackingRefreshState.Fail("Couldn't reach the courier. Try again.")
+            }
+        }
+    }
+
+    fun clearTrackingRefresh() {
+        _trackingRefresh.value = TrackingRefreshState.Idle
+    }
+
+    fun hideOrder(id: String) {
+        viewModelScope.launch { dao.setHidden(id, true) }
+    }
+
+    fun softDeleteOrder(id: String) {
+        viewModelScope.launch { dao.setDeletedAt(id, System.currentTimeMillis()) }
+    }
+
+    fun toggleWatched(id: String, currentlyWatched: Boolean) {
+        viewModelScope.launch { dao.setWatched(id, !currentlyWatched) }
+    }
+
+    fun exportCsvIntent() = viewModelScope.launch {
+        // Intent returned via a one-shot event is awkward; callers use shareCsv()
+    }
+
+    suspend fun buildCsvShareIntent() =
+        OrderShare.csvShareIntent(getApplication(), dao.listVisibleOrders())
 }

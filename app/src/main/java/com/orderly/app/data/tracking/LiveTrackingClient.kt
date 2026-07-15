@@ -172,7 +172,7 @@ object LiveTrackingClient {
             val location = LocationNames.fromTrackingText(plain)
             val status = statusFromText(plain)
             val whenMs = parseFlexibleDate(plain) ?: 0L
-            val desc = cleanLiveDescription(plain)
+            val desc = cleanLiveDescription(plain, location)
             // Prefer real checkpoint time; never stamp all events with "now" (that breaks sort).
             val occurredAt = when {
                 whenMs > 0L -> whenMs
@@ -209,7 +209,7 @@ object LiveTrackingClient {
                             occurredAt = System.currentTimeMillis(),
                             status = statusFromText(current),
                             location = LocationNames.sanitize(destination) ?: LocationNames.sanitize(origin),
-                            description = cleanLiveDescription(current),
+                            description = cleanLiveDescription(current, LocationNames.sanitize(destination) ?: LocationNames.sanitize(origin)),
                             source = "live",
                             fingerprint = "lcs|$cn|current|$current".hashFingerprint()
                         )
@@ -521,16 +521,43 @@ object LiveTrackingClient {
             .replace(Regex("""\s+"""), " ")
             .trim()
 
-    /** Drop embedded date from courier status lines for cleaner timeline titles. */
-    private fun cleanLiveDescription(plain: String): String {
+    /** Drop embedded date from courier status lines; prefer short status · city. */
+    private fun cleanLiveDescription(plain: String, location: String? = null): String {
         val withoutDate = plain.replace(
             Regex(
                 """\d{1,2}\s+(?:January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\.?,?\s*\d{4}\s*\(?\s*\d{1,2}:\d{2}\s*(?:am|pm)?\s*\)?\s*""",
                 RegexOption.IGNORE_CASE
             ),
             ""
-        )
-        return withoutDate.replace(Regex("""\s+"""), " ").trim().take(180)
+        ).replace(Regex("""\s+"""), " ").trim()
+
+        val status = statusFromText(withoutDate)
+        val short = when (status) {
+            OrderStatus.DELIVERED -> "Delivered"
+            OrderStatus.OUT_FOR_DELIVERY -> "Out for delivery"
+            OrderStatus.IN_TRANSIT -> when {
+                "picked" in withoutDate.lowercase() -> "Picked up"
+                "dispatched" in withoutDate.lowercase() -> "Dispatched"
+                "arrived" in withoutDate.lowercase() -> "Arrived"
+                else -> "In transit"
+            }
+            OrderStatus.SHIPPED -> when {
+                "picked" in withoutDate.lowercase() -> "Picked up"
+                "dispatched" in withoutDate.lowercase() -> "Dispatched"
+                else -> "Shipped"
+            }
+            OrderStatus.DELAYED -> "Delayed"
+            OrderStatus.RETURNED -> "Returned"
+            OrderStatus.PROCESSING -> "Booked"
+            else -> withoutDate.take(80).ifBlank { "Update" }
+        }
+        val city = location?.takeIf { it.isNotBlank() }
+            ?: LocationNames.fromTrackingText(withoutDate)
+        return if (city != null && !short.contains(city, ignoreCase = true)) {
+            "$short · $city"
+        } else {
+            short
+        }
     }
 
     /**

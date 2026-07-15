@@ -14,10 +14,15 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -26,10 +31,12 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.orderly.app.data.OrderShare
 import com.orderly.app.data.db.TrackingEventEntity
 import com.orderly.app.data.tracking.LocationNames
 import com.orderly.app.data.tracking.PakCourier
 import com.orderly.app.ui.MainViewModel
+import com.orderly.app.ui.TrackingRefreshState
 import com.orderly.app.ui.formatAmount
 import com.orderly.app.ui.formatDate
 import com.orderly.app.ui.formatDateTime
@@ -44,7 +51,12 @@ fun OrderDetailScreen(
     val observed by viewModel.observeOrder(orderId).collectAsState(initial = cached)
     val order = observed ?: cached
     val events by viewModel.observeEvents(orderId).collectAsState(initial = emptyList())
+    val refresh by viewModel.trackingRefresh.collectAsState()
     val context = LocalContext.current
+
+    LaunchedEffect(orderId) {
+        viewModel.clearTrackingRefresh()
+    }
 
     if (order == null) {
         EmptyState("Order not found.")
@@ -53,6 +65,10 @@ fun OrderDetailScreen(
 
     val courier = PakCourier.detect(order.trackingNumber, order.carrier)
     val trackUrl = order.trackingNumber?.let { courier.trackUrl(it) }
+    val visibleEvents = events.distinctBy {
+        val day = it.occurredAt / 86_400_000L
+        "${it.status}|${it.location?.lowercase()}|$day|${it.description.take(40).lowercase()}"
+    }
 
     Column(
         modifier = Modifier
@@ -97,8 +113,21 @@ fun OrderDetailScreen(
             }
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(12.dp))
+        Row(modifier = Modifier.fillMaxWidth()) {
+            TextButton(onClick = {
+                context.startActivity(
+                    Intent.createChooser(OrderShare.shareIntent(order), "Share order")
+                )
+            }) { Text("Share") }
+            TextButton(onClick = { viewModel.toggleWatched(order.id, order.watched) }) {
+                Text(if (order.watched) "Unwatch" else "Watch")
+            }
+            TextButton(onClick = { viewModel.hideOrder(order.id) }) { Text("Hide") }
+            TextButton(onClick = { viewModel.softDeleteOrder(order.id) }) { Text("Delete") }
+        }
 
+        Spacer(modifier = Modifier.height(8.dp))
         SoftCard(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(16.dp)) {
                 DetailRow("Order number", order.orderNumber ?: "—")
@@ -107,8 +136,12 @@ fun OrderDetailScreen(
                 DetailRow("Tracking", order.trackingNumber ?: "—")
                 DetailRow("Carrier", order.carrier ?: "—")
                 DetailRow("Shipped from", order.shipFrom ?: "—")
-                DetailRow("Last location", order.lastLocation ?: "—")
+                DetailRow("Last location", LocationNames.sanitize(order.lastLocation) ?: "—")
                 DetailRow("Updated", formatDateTime(order.updatedAt))
+                DetailRow(
+                    "Last live check",
+                    order.lastLiveCheckAt?.let { formatDateTime(it) } ?: "Not yet"
+                )
                 if (trackUrl != null && !order.trackingNumber.isNullOrBlank()) {
                     TextButton(
                         onClick = {
@@ -120,10 +153,50 @@ fun OrderDetailScreen(
                         Text("Open on ${courier.displayName}")
                     }
                 }
+                Spacer(modifier = Modifier.height(8.dp))
+                when (val state = refresh) {
+                    is TrackingRefreshState.Loading -> {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(modifier = Modifier.height(20.dp).width(20.dp))
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Text("Refreshing tracking…")
+                        }
+                    }
+                    is TrackingRefreshState.Fail -> {
+                        Text(
+                            state.message,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedButton(onClick = { viewModel.refreshTracking(order.id) }) {
+                            Text("Try again")
+                        }
+                    }
+                    is TrackingRefreshState.Ok -> {
+                        Text(
+                            "Tracking updated",
+                            color = MaterialTheme.colorScheme.primary,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                    else -> Unit
+                }
+                if (refresh !is TrackingRefreshState.Loading &&
+                    !order.trackingNumber.isNullOrBlank()
+                ) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Button(
+                        onClick = { viewModel.refreshTracking(order.id) },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Refresh tracking")
+                    }
+                }
             }
         }
 
-        if (events.isNotEmpty()) {
+        if (visibleEvents.isNotEmpty()) {
             Spacer(modifier = Modifier.height(16.dp))
             SoftCard(modifier = Modifier.fillMaxWidth()) {
                 Column(modifier = Modifier.padding(16.dp)) {
@@ -133,18 +206,35 @@ fun OrderDetailScreen(
                         fontWeight = FontWeight.SemiBold
                     )
                     Spacer(modifier = Modifier.height(12.dp))
-                    events.forEachIndexed { index, event ->
+                    visibleEvents.forEachIndexed { index, event ->
                         TimelineRow(
                             event = event,
-                            isLast = index == events.lastIndex
+                            isLast = index == visibleEvents.lastIndex,
+                            showLatest = index == visibleEvents.lastIndex && event.source == "live"
                         )
                     }
+                }
+            }
+        } else if (!order.trackingNumber.isNullOrBlank()) {
+            Spacer(modifier = Modifier.height(16.dp))
+            SoftCard(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        "No live checkpoints yet",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        "Pull Refresh tracking to fetch courier updates.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
         }
 
         Spacer(modifier = Modifier.height(16.dp))
-
         SoftCard(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Text(
@@ -160,7 +250,11 @@ fun OrderDetailScreen(
 }
 
 @Composable
-private fun TimelineRow(event: TrackingEventEntity, isLast: Boolean) {
+private fun TimelineRow(
+    event: TrackingEventEntity,
+    isLast: Boolean,
+    showLatest: Boolean
+) {
     val lineColor = MaterialTheme.colorScheme.outlineVariant
     val dotColor = event.status?.let { statusColor(it) } ?: MaterialTheme.colorScheme.primary
 
@@ -190,14 +284,22 @@ private fun TimelineRow(event: TrackingEventEntity, isLast: Boolean) {
         }
         Spacer(modifier = Modifier.width(10.dp))
         Column(modifier = Modifier.weight(1f)) {
-            Text(
-                event.description,
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.Medium
-            )
-            if (!event.location.isNullOrBlank()) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    event.location,
+                    event.description,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+                if (showLatest) {
+                    Spacer(modifier = Modifier.width(8.dp))
+                    AssistChip(onClick = {}, label = { Text("Latest") })
+                }
+            }
+            val loc = LocationNames.sanitize(event.location)
+            if (!loc.isNullOrBlank() && !event.description.contains(loc, ignoreCase = true)) {
+                Text(
+                    loc,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.primary
                 )

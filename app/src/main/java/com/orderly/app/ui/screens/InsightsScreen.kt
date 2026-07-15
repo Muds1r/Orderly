@@ -1,5 +1,6 @@
 package com.orderly.app.ui.screens
 
+import android.content.Intent
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -9,17 +10,21 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.orderly.app.ui.MainViewModel
 import com.orderly.app.ui.formatAmount
+import kotlinx.coroutines.launch
 
 @Composable
 fun InsightsScreen(viewModel: MainViewModel) {
@@ -28,6 +33,8 @@ fun InsightsScreen(viewModel: MainViewModel) {
     val lifetime by viewModel.lifetimeOrderCount.collectAsState()
     val stores by viewModel.storeSummaries.collectAsState()
     val avg = if (count > 0) spent / count else 0.0
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
 
     LazyColumn(
         modifier = Modifier
@@ -52,7 +59,7 @@ fun InsightsScreen(viewModel: MainViewModel) {
                             fontWeight = FontWeight.SemiBold
                         )
                         Text(
-                            "$count orders · avg ${formatAmount(avg, "PKR")}",
+                            "$count paid orders · avg ${formatAmount(avg, "PKR")}",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -62,6 +69,19 @@ fun InsightsScreen(viewModel: MainViewModel) {
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Button(
+                            onClick = {
+                                scope.launch {
+                                    val intent = viewModel.buildCsvShareIntent()
+                                    context.startActivity(
+                                        Intent.createChooser(intent, "Export CSV")
+                                    )
+                                }
+                            }
+                        ) {
+                            Text("Export CSV")
+                        }
                     }
                 }
             }

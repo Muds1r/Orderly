@@ -8,15 +8,19 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.orderly.app.ui.MainViewModel
+import com.orderly.app.ui.SyncState
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun OrdersScreen(
     viewModel: MainViewModel,
@@ -24,8 +28,10 @@ fun OrdersScreen(
 ) {
     val query by viewModel.searchQuery.collectAsState()
     val orders by viewModel.searchedOrders.collectAsState()
+    val syncState by viewModel.syncState.collectAsState()
+    val refreshing = syncState is SyncState.Syncing
 
-    Column(Modifier.fillMaxSize()) {
+    Column(modifier = Modifier.fillMaxSize()) {
         OutlinedTextField(
             value = query,
             onValueChange = viewModel::setSearchQuery,
@@ -36,17 +42,23 @@ fun OrdersScreen(
             singleLine = true
         )
 
-        if (orders.isEmpty()) {
-            EmptyState(
-                if (query.isBlank()) "No orders yet."
-                else "No matches for \"$query\"."
-            )
-        } else {
-            LazyColumn(Modifier.fillMaxSize()) {
-                items(orders, key = { it.id }) { order ->
-                    OrderRow(order) { onOrderClick(order.id) }
+        PullToRefreshBox(
+            isRefreshing = refreshing,
+            onRefresh = { viewModel.syncNow() },
+            modifier = Modifier.fillMaxSize()
+        ) {
+            if (orders.isEmpty()) {
+                EmptyState(
+                    if (query.isBlank()) "No orders yet. Pull down to sync."
+                    else "No matches for \"$query\"."
+                )
+            } else {
+                LazyColumn(modifier = Modifier.fillMaxSize()) {
+                    items(orders, key = { it.id }) { order ->
+                        OrderRow(order) { onOrderClick(order.id) }
+                    }
+                    item { Spacer(modifier = Modifier.height(24.dp)) }
                 }
-                item { Spacer(modifier = Modifier.height(24.dp)) }
             }
         }
     }

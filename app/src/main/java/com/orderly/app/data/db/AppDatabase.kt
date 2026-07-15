@@ -20,7 +20,7 @@ class Converters {
 
 @Database(
     entities = [OrderEntity::class, ProcessedMessageEntity::class, TrackingEventEntity::class],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -67,6 +67,17 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE orders ADD COLUMN deletedAt INTEGER")
+                db.execSQL("ALTER TABLE orders ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE orders ADD COLUMN watched INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE orders ADD COLUMN lastLiveCheckAt INTEGER")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_orders_hidden ON orders(hidden)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_orders_watched ON orders(watched)")
+            }
+        }
+
         fun get(context: Context): AppDatabase =
             instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
@@ -74,7 +85,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "orderly.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                     .build()
                     .also { instance = it }
             }

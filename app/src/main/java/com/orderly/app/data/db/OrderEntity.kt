@@ -25,37 +25,37 @@ enum class OrderStatus {
         Index("orderDate"),
         Index("status"),
         Index("trackingNumber"),
+        Index("hidden"),
+        Index("watched"),
         Index(value = ["store", "orderNumber"], unique = true)
     ]
 )
 data class OrderEntity(
-    /**
-     * Stable id: "store|orderNumber" when order number is known,
-     * otherwise the email Message-ID.
-     */
     @PrimaryKey val id: String,
     val store: String,
     val orderNumber: String?,
-    /** Short product blurb from the email (often incomplete). */
     val productSummary: String?,
     val trackingNumber: String?,
     val carrier: String?,
-    /** Ship-from / origin city or facility when known. */
     val shipFrom: String? = null,
-    /** Latest known hub / city from tracking. */
     val lastLocation: String? = null,
-    /** Epoch millis of the order / email date. */
     val orderDate: Long,
     val amount: Double?,
     val currency: String?,
     val paymentStatus: String?,
     val status: OrderStatus,
     val estimatedDelivery: Long?,
-    /** Latest related email subject (for detail view). */
     val subject: String,
-    /** Last email Message-ID that updated this row. */
     val lastMessageId: String,
-    val updatedAt: Long
+    val updatedAt: Long,
+    /** Soft delete — null means visible. */
+    val deletedAt: Long? = null,
+    /** User hid from main lists without deleting. */
+    val hidden: Boolean = false,
+    /** Prioritize for live tracking / notifications. */
+    val watched: Boolean = false,
+    /** Last successful courier live lookup (epoch ms). */
+    val lastLiveCheckAt: Long? = null
 )
 
 @Entity(tableName = "processed_messages")
