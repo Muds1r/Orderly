@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Simplified Daraz-style mark -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+    <path
+        android:fillColor="#F57224"
+        android:pathData="M12,10h16c6,0 10,4 10,10s-4,10 -10,10H18v10h-6V10zM18,14v12h9c3.3,0 5.5,-2 5.5,-6S30.3,14 27,14H18z"/>
+</vector>

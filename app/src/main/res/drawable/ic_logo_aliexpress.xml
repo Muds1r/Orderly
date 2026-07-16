@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Simplified AliExpress-style mark -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+    <path
+        android:fillColor="#FF6A00"
+        android:pathData="M8,14h32v4H8z"/>
+    <path
+        android:fillColor="#FF6A00"
+        android:pathData="M10,20h28l-2,16H12z"/>
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M18,24h12v3H18zM16,30h16v3H16z"/>
+</vector>

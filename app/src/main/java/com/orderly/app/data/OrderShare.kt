@@ -50,7 +50,7 @@ object OrderShare {
         val df = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US)
         file.bufferedWriter().use { out ->
             out.appendLine(
-                "store,orderNumber,product,status,amount,currency,tracking,carrier,location,orderDate,watched"
+                "store,orderNumber,product,status,amount,currency,tracking,carrier,location,orderDate"
             )
             orders.forEach { o ->
                 out.appendLine(
@@ -64,8 +64,7 @@ object OrderShare {
                         o.trackingNumber.orEmpty(),
                         o.carrier.orEmpty(),
                         o.lastLocation.orEmpty(),
-                        df.format(Date(o.orderDate)),
-                        if (o.watched) "yes" else "no"
+                        df.format(Date(o.orderDate))
                     ).joinToString(",") { csvEscape(it) }
                 )
             }

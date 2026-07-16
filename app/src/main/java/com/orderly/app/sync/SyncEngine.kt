@@ -12,7 +12,6 @@ import com.orderly.app.data.parser.OrderParser
 import com.orderly.app.data.tracking.LiveTrackingClient
 import com.orderly.app.data.tracking.LocationNames
 import com.orderly.app.data.tracking.PakCourier
-import com.orderly.app.notify.StatusNotifier
 import kotlinx.coroutines.flow.first
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
@@ -69,7 +68,7 @@ object SyncEngine {
                 val existing = dao.getByTrackingNumber(tracking)
                 if (existing != null && existing.deletedAt == null) {
                     applyLiveOrEmailUpdate(
-                        context, dao, existing, result.order.carrier, result.order.shipFrom,
+                        dao, existing, result.order.carrier, result.order.shipFrom,
                         result.order.lastLocation, result.order.status, result.events, forceStatus = false
                     )
                     dao.insertProcessed(
@@ -114,7 +113,7 @@ object SyncEngine {
         dao.setLastLiveCheckAt(orderId, System.currentTimeMillis())
         if (live == null) return false
         applyLiveOrEmailUpdate(
-            context, dao, order,
+            dao, order,
             live.carrier.displayName, live.origin,
             live.lastLocation ?: live.destination,
             live.currentStatus, live.events, forceStatus = true
@@ -132,7 +131,6 @@ object SyncEngine {
     }
 
     private suspend fun applyLiveOrEmailUpdate(
-        context: Context,
         dao: com.orderly.app.data.db.OrderDao,
         existing: OrderEntity,
         carrier: String?,
@@ -142,7 +140,6 @@ object SyncEngine {
         events: List<com.orderly.app.data.db.TrackingEventDraft>,
         forceStatus: Boolean
     ) {
-        val previous = existing.status
         dao.applyTrackingUpdate(
             orderId = existing.id,
             carrier = carrier,
@@ -152,22 +149,6 @@ object SyncEngine {
             events = events,
             forceStatus = forceStatus
         )
-        val next = status?.let {
-            if (forceStatus) OrderStatusMerge.preferLive(previous, it)
-            else OrderStatusMerge.prefer(previous, it)
-        } ?: previous
-        if (next != previous) {
-            StatusNotifier.notifyIfChanged(
-                context,
-                existing.copy(
-                    status = next,
-                    lastLocation = LocationNames.sanitize(lastLocation) ?: existing.lastLocation,
-                    carrier = carrier ?: existing.carrier
-                ),
-                previous,
-                next
-            )
-        }
     }
 
     private suspend fun cleanupFoulAndDuplicateOrders(dao: com.orderly.app.data.db.OrderDao) {
@@ -255,7 +236,7 @@ object SyncEngine {
             dao.setLastLiveCheckAt(order.id, System.currentTimeMillis())
             if (live == null) continue
             applyLiveOrEmailUpdate(
-                context, dao, order,
+                dao, order,
                 live.carrier.displayName, live.origin,
                 live.lastLocation ?: live.destination,
                 live.currentStatus, live.events, forceStatus = true

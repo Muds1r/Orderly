@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Simplified Amazon wordmark-style mark (a + smile) for local branding -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+    <path
+        android:fillColor="#232F3E"
+        android:pathData="M10,14h6c4.4,0 7,2.4 7,6.2c0,3.8 -2.6,6.3 -7,6.3H14v7H10V14zM14,18v4.5h2c1.8,0 2.9,-0.9 2.9,-2.2c0,-1.4 -1.1,-2.3 -2.9,-2.3H14z"/>
+    <path
+        android:fillColor="#FF9900"
+        android:pathData="M12,38c6,3.2 14,3.5 22,0.2c0.6,-0.3 1.1,0.4 0.7,0.9C30,43 22.5,45 15,42.5c-0.7,-0.2 -0.6,-1.1 0.2,-1.4C11.5,39.8 11.7,38.8 12,38z"/>
+</vector>

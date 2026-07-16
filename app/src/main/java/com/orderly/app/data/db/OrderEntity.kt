@@ -48,11 +48,9 @@ data class OrderEntity(
     val subject: String,
     val lastMessageId: String,
     val updatedAt: Long,
-    /** Soft delete — null means visible. */
+    /** Soft-delete / hide / watch kept for schema compatibility; unused by UI. */
     val deletedAt: Long? = null,
-    /** User hid from main lists without deleting. */
     val hidden: Boolean = false,
-    /** Prioritize for live tracking / notifications. */
     val watched: Boolean = false,
     /** Last successful courier live lookup (epoch ms). */
     val lastLiveCheckAt: Long? = null
@@ -74,4 +72,12 @@ data class StoreSummary(
 data class StatusCount(
     val status: OrderStatus,
     val count: Int
+)
+
+/** One month bucket for Insights spend trend. */
+data class MonthlySpend(
+    /** `yyyy-MM` */
+    val monthKey: String,
+    val totalSpent: Double,
+    val orderCount: Int
 )

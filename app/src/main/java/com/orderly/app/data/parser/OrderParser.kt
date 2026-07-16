@@ -205,9 +205,12 @@ object OrderParser {
     fun isPromoOrUnrelated(fromHeader: String, subjectLower: String, bodyLower: String): Boolean {
         val from = fromHeader.lowercase()
         val blockedSenders = listOf(
+            // Food / QSR / ride-hailing (not parcel tracking)
             "foodpanda", "pandamart", "careem", "bykea", "uber.com",
-            "mcdonalds", "kfc.", "pizza hut", "domino", "newsletter@",
-            "marketing@", "promo@", "offers@", "deals@"
+            "blinkco", "blinkco.io", "savourfoods", "cheetay", "talabat",
+            "mcdonalds", "kfc.", "pizza hut", "domino",
+            // Marketing
+            "newsletter@", "marketing@", "promo@", "offers@", "deals@"
         )
         if (blockedSenders.any { it in from }) return true
 

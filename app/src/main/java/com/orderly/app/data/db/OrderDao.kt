@@ -124,6 +124,17 @@ interface OrderDao {
     ) {
         if (wasProcessed(messageId)) return
 
+        if (isIncomingExcluded(incoming)) {
+            insertProcessed(
+                ProcessedMessageEntity(
+                    messageId = messageId,
+                    orderId = "excluded",
+                    processedAt = System.currentTimeMillis()
+                )
+            )
+            return
+        }
+
         var existing = when {
             !incoming.orderNumber.isNullOrBlank() ->
                 getByStoreAndOrderNumberIgnoreCase(incoming.store, incoming.orderNumber)
@@ -164,6 +175,10 @@ interface OrderDao {
                 processedAt = System.currentTimeMillis()
             )
         )
+    }
+
+    private suspend fun isIncomingExcluded(incoming: OrderEntity): Boolean {
+        return ExclusionKeys.forIncoming(incoming).any { isExcludedKey(it) }
     }
 
     /**
@@ -336,7 +351,7 @@ interface OrderDao {
         """
         SELECT * FROM tracking_events
         WHERE orderId = :orderId
-        ORDER BY occurredAt ASC, id ASC
+        ORDER BY occurredAt DESC, id DESC
         """
     )
     fun observeEvents(orderId: String): Flow<List<TrackingEventEntity>>
@@ -349,7 +364,6 @@ interface OrderDao {
           AND trackingNumber != ''
           AND status NOT IN ('CANCELLED', 'RETURNED')
         ORDER BY
-          CASE WHEN watched = 1 THEN 0 ELSE 1 END,
           CASE WHEN status = 'DELIVERED' THEN 1 ELSE 0 END,
           CASE WHEN lastLiveCheckAt IS NULL THEN 0 ELSE lastLiveCheckAt END ASC
         LIMIT :limit
@@ -380,9 +394,7 @@ interface OrderDao {
         SELECT * FROM orders
         WHERE deletedAt IS NULL AND hidden = 0
           AND status NOT IN ('DELIVERED', 'CANCELLED', 'RETURNED')
-        ORDER BY
-          CASE WHEN watched = 1 THEN 0 ELSE 1 END,
-          orderDate DESC
+        ORDER BY orderDate DESC
         """
     )
     fun activeOrders(): Flow<List<OrderEntity>>
@@ -392,9 +404,7 @@ interface OrderDao {
         SELECT * FROM orders
         WHERE deletedAt IS NULL AND hidden = 0
           AND status IN ('SHIPPED', 'IN_TRANSIT', 'OUT_FOR_DELIVERY', 'DELAYED')
-        ORDER BY
-          CASE WHEN watched = 1 THEN 0 ELSE 1 END,
-          orderDate DESC
+        ORDER BY orderDate DESC
         """
     )
     fun inTransitOrders(): Flow<List<OrderEntity>>
@@ -474,38 +484,45 @@ interface OrderDao {
     @Query("SELECT COUNT(*) FROM orders WHERE deletedAt IS NULL AND hidden = 0")
     fun totalOrderCount(): Flow<Int>
 
-    @Query("UPDATE orders SET hidden = :hidden WHERE id = :id")
-    suspend fun setHidden(id: String, hidden: Boolean)
+    @Query(
+        """
+        SELECT strftime('%Y-%m', orderDate / 1000, 'unixepoch', 'localtime') AS monthKey,
+               SUM(IFNULL(amount, 0)) AS totalSpent,
+               COUNT(*) AS orderCount
+        FROM orders
+        WHERE deletedAt IS NULL AND hidden = 0
+          AND orderDate BETWEEN :start AND :end
+          AND IFNULL(amount, 0) > 0
+        GROUP BY monthKey
+        ORDER BY monthKey ASC
+        """
+    )
+    fun monthlySpend(start: Long, end: Long): Flow<List<MonthlySpend>>
 
-    @Query("UPDATE orders SET watched = :watched WHERE id = :id")
-    suspend fun setWatched(id: String, watched: Boolean)
-
-    @Query("UPDATE orders SET deletedAt = :deletedAt WHERE id = :id")
-    suspend fun setDeletedAt(id: String, deletedAt: Long?)
+    @Query(
+        """
+        SELECT SUM(IFNULL(amount, 0)) FROM orders
+        WHERE deletedAt IS NULL AND hidden = 0
+          AND orderDate BETWEEN :start AND :end
+          AND IFNULL(amount, 0) > 0
+        """
+    )
+    suspend fun totalSpentOnce(start: Long, end: Long): Double?
 
     @Query("UPDATE orders SET lastLiveCheckAt = :at WHERE id = :id")
     suspend fun setLastLiveCheckAt(id: String, at: Long)
 
-    @Query(
-        """
-        SELECT * FROM orders
-        WHERE deletedAt IS NULL AND hidden = 1
-        ORDER BY orderDate DESC
-        """
-    )
-    fun hiddenOrders(): Flow<List<OrderEntity>>
-
-    @Query(
-        """
-        SELECT * FROM orders
-        WHERE deletedAt IS NULL AND watched = 1
-        ORDER BY orderDate DESC
-        """
-    )
-    fun watchedOrders(): Flow<List<OrderEntity>>
-
     @Query("SELECT * FROM orders WHERE deletedAt IS NULL ORDER BY orderDate DESC")
     suspend fun listVisibleOrders(): List<OrderEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertExclusion(exclusion: ExcludedOrderEntity)
+
+    @Query("SELECT EXISTS(SELECT 1 FROM excluded_orders WHERE exclusionKey = :key)")
+    suspend fun isExcludedKey(key: String): Boolean
+
+    @Query("DELETE FROM excluded_orders")
+    suspend fun deleteAllExclusions()
 
     @Query("DELETE FROM orders")
     suspend fun deleteAllOrders()
